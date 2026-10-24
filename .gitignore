@@ -1,0 +1,9 @@
+bin/
+obj/
+dist/
+*.user
+.vs/
+*.html
+surface*.json
+dump.json
+!rules/*.json

@@ -1,0 +1,56 @@
+{
+  "version": "1.0.0",
+  "overrides": [
+    { "vendor": "Seagate Barracuda Compute", "match": { "model_regex": "^ST[0-9]{4}[A-Z]{2}[0-9]{3}" },
+      "attributes": {
+        "241": { "decode": "le48_at_0_5_lba" },
+        "242": { "decode": "le48_at_0_5_lba" }
+      } },
+    { "vendor": "Seagate IronWolf", "match": { "model_regex": "^ST[0-9]{4}VN" },
+      "attributes": {
+        "9":   { "decode": "le32_at_0_3" },
+        "241": { "decode": "le48_at_0_5_lba" },
+        "242": { "decode": "le48_at_0_5_lba" }
+      } },
+    { "vendor": "Seagate Legacy", "match": { "model_regex": "^ST[0-9]" },
+      "attributes": {
+        "9":   { "decode": "le32_at_0_3" }
+      } },
+    { "vendor": "Western Digital", "match": { "model_regex": "^WDC WD" },
+      "attributes": {
+        "9":   { "decode": "le16_at_0_1" },
+        "194": { "decode": "first_byte" }
+      } },
+    { "vendor": "HGST", "match": { "model_regex": "^Hitachi|^HTS|^HDS|^HGST" },
+      "attributes": {
+        "9":   { "decode": "le32_at_0_3" }
+      } },
+    { "vendor": "Toshiba", "match": { "model_regex": "^TOSHIBA|^HDW|^MQ0|^DT0|^MG0" },
+      "attributes": {
+        "9":   { "decode": "le32_at_0_3" }
+      } },
+    { "vendor": "Samsung SSD", "match": { "model_regex": "^Samsung SSD" },
+      "attributes": {
+        "9":   { "decode": "le32_at_0_3" },
+        "177": { "decode": "raw_no_decode" },
+        "241": { "decode": "le48_at_0_5_lba" },
+        "242": { "decode": "le48_at_0_5_lba" }
+      } },
+    { "vendor": "Crucial/Micron", "match": { "model_regex": "^Crucial|^CT[0-9]|^Micron" },
+      "attributes": {
+        "9":   { "decode": "le32_at_0_3" },
+        "202": { "decode": "raw_no_decode" }
+      } },
+    { "vendor": "Kingston", "match": { "model_regex": "^Kingston|^SA400|^SV300|^SH" },
+      "attributes": {
+        "9":   { "decode": "le32_at_0_3" },
+        "231": { "decode": "raw_no_decode" }
+      } },
+    { "vendor": "GIGABYTE SSD", "match": { "model_regex": "^GIGABYTE GP-" },
+      "attributes": {
+        "9":   { "decode": "le32_at_0_3" },
+        "241": { "decode": "le48_at_0_5_lba" },
+        "242": { "decode": "le48_at_0_5_lba" }
+      } }
+  ]
+}

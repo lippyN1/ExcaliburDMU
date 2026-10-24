@@ -1,0 +1,32 @@
+{
+  "version": "1.0.0",
+  "verdicts": {
+    "failing": {
+      "description": "Disk is failing or about to fail. Back up data immediately.",
+      "rules": [
+        { "type": "attr_above", "attr_id": 5,   "value": 0, "reason": "Reallocated sectors present" },
+        { "type": "attr_above", "attr_id": 197, "value": 0, "reason": "Pending sectors present" },
+        { "type": "attr_above", "attr_id": 198, "value": 0, "reason": "Offline uncorrectable sectors present" },
+        { "type": "attr_above", "attr_id": 187, "value": 0, "reason": "Reported uncorrect errors" },
+        { "type": "attr_below_percent", "attr_id": 231, "value": 10, "reason": "SSD life left below 10%" },
+        { "type": "attr_below_percent", "attr_id": 233, "value": 10, "reason": "Media wearout below 10%" }
+      ]
+    },
+    "warning": {
+      "description": "Disk is degrading or has recoverable issues. Monitor closely.",
+      "rules": [
+        { "type": "attr_above", "attr_id": 5,   "value": 0, "reason": "Reallocated sectors present" },
+        { "type": "attr_above", "attr_id": 199, "value": 0, "reason": "UDMA CRC errors (check cable/port)" },
+        { "type": "attr_above", "attr_id": 218, "value": 0, "reason": "CRC errors (check cable/port)" },
+        { "type": "attr_above", "attr_id": 197, "value": 0, "reason": "Pending sectors present" },
+        
+        { "type": "attr_below_percent", "attr_id": 231, "value": 30, "reason": "SSD life left below 30%" },
+        { "type": "attr_below_percent", "attr_id": 233, "value": 30, "reason": "Media wearout below 30%" },
+        { "type": "attr_above_temp", "attr_id": 194, "value": 55, "reason": "Temperature above 55 C" },
+        { "type": "attr_above_temp", "attr_id": 190, "value": 55, "reason": "Airflow temperature above 55 C" }
+      ]
+    },
+    "healthy": { "description": "Disk appears healthy. No anomalies in monitored attributes." },
+    "unknown": { "description": "Not enough information to make a verdict." }
+  }
+}
