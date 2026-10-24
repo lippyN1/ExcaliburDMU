@@ -88,4 +88,10 @@
   <data name="Mode_MarkerOnly" xml:space="preserve"><value>marker-only (fast)</value></data>
   <data name="Mode_Preserve" xml:space="preserve"><value>will be preserved (MBR/GPT saved and restored)</value></data>
   <data name="Mode_Destroy" xml:space="preserve"><value>will be DESTROYED</value></data>
+  <data name="Help_PartitionOptions" xml:space="preserve"><value>partition management (use with caution):</value></data>
+  <data name="Help_CreatePart_Desc" xml:space="preserve"><value>  --create-partition --disk N --size MB --fs FS --i-understand-data-loss</value></data>
+  <data name="Help_DeletePart_Desc" xml:space="preserve"><value>  --delete-partition --disk N --index K --i-understand-data-loss</value></data>
+  <data name="Help_SetLetter_Desc" xml:space="preserve"><value>  --set-letter --mount D: --letter E</value></data>
+  <data name="Help_SetLabel_Desc" xml:space="preserve"><value>  --set-label --mount D: --label TEXT</value></data>
+  <data name="Help_FormatVolume_Desc" xml:space="preserve"><value>  --format-volume --mount D: --fs FAT32 --i-understand-data-loss</value></data>
 </root>

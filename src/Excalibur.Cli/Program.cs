@@ -37,6 +37,12 @@ internal static class Program
         if (HasArg(args, "--capacity-test"))
             return RunCapacityTest(args);
 
+        if (HasArg(args, "--create-partition")) return RunCreatePartition(args);
+        if (HasArg(args, "--delete-partition")) return RunDeletePartition(args);
+        if (HasArg(args, "--set-letter")) return RunSetLetter(args);
+        if (HasArg(args, "--set-label")) return RunSetLabel(args);
+        if (HasArg(args, "--format-volume")) return RunFormatVolume(args);
+
         Console.Error.WriteLine(L.T("Error_UnknownArgs", string.Join(' ', args)));
         PrintHelp();
         return 2;
@@ -457,4 +463,67 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine(L.T("App_RunElevated"));
     }
+
+    // ---- partition management ----
+
+    private static int RunCreatePartition(string[] args)
+    {
+        if (!TryGetIntArg(args, "--disk", out int diskNumber)) { Console.Error.WriteLine(L.T("Error_DiskRequired")); return 2; }
+        if (!TryGetLongArg(args, "--size", out long sizeMb)) { Console.Error.WriteLine("--size <MB> is required"); return 2; }
+        string fs = TryGetStringArg(args, "--fs", out var fsStr) ? fsStr : "FAT32";
+        bool confirm = HasArg(args, "--i-understand-data-loss");
+        if (!confirm) { Console.Error.WriteLine("DESTRUCTIVE: --create-partition overwrites partition table. Add --i-understand-data-loss."); return 2; }
+        var enumr = new DeviceEnumerator();
+        var disks = enumr.EnumerateAll();
+        var disk = disks.FirstOrDefault(d => d.DiskNumber == diskNumber);
+        if (disk == null) { Console.Error.WriteLine(L.T("Error_DiskNotFound", diskNumber, "")); return 2; }
+        Console.Error.WriteLine("  Disk #" + diskNumber + ": " + (disk.Model ?? "?") + " SN:" + (disk.SerialNumber ?? "?"));
+        Console.Error.WriteLine("Type serial number to confirm (or Ctrl+C to abort):");
+        var typed = Console.ReadLine();
+        if (!string.Equals(typed?.Trim(), disk.SerialNumber, StringComparison.Ordinal)) { Console.Error.WriteLine("Serial mismatch. Aborting."); return 2; }
+        var r = PartitionManager.CreatePartition(diskNumber, sizeMb, fs);
+        Console.WriteLine(JsonSerializer.Serialize(r, JsonOpts));
+        return r.Success ? 0 : 1;
+    }
+
+    private static int RunDeletePartition(string[] args)
+    {
+        if (!TryGetIntArg(args, "--disk", out int diskNumber)) { Console.Error.WriteLine(L.T("Error_DiskRequired")); return 2; }
+        if (!TryGetIntArg(args, "--index", out int index)) { Console.Error.WriteLine("--index <N> is required"); return 2; }
+        bool confirm = HasArg(args, "--i-understand-data-loss");
+        if (!confirm) { Console.Error.WriteLine("DESTRUCTIVE: --delete-partition destroys data. Add --i-understand-data-loss."); return 2; }
+        var r = PartitionManager.DeletePartition(diskNumber, index);
+        Console.WriteLine(JsonSerializer.Serialize(r, JsonOpts));
+        return r.Success ? 0 : 1;
+    }
+
+    private static int RunSetLetter(string[] args)
+    {
+        if (!TryGetStringArg(args, "--mount", out var mount)) { Console.Error.WriteLine("--mount <D:> is required"); return 2; }
+        if (!TryGetStringArg(args, "--letter", out var letter)) { Console.Error.WriteLine("--letter <E> is required"); return 2; }
+        var r = PartitionManager.SetLetter(mount, letter);
+        Console.WriteLine(JsonSerializer.Serialize(r, JsonOpts));
+        return r.Success ? 0 : 1;
+    }
+
+    private static int RunSetLabel(string[] args)
+    {
+        if (!TryGetStringArg(args, "--mount", out var mount)) { Console.Error.WriteLine("--mount <D:> is required"); return 2; }
+        if (!TryGetStringArg(args, "--label", out var label)) { Console.Error.WriteLine("--label <text> is required"); return 2; }
+        var r = PartitionManager.SetLabel(mount, label);
+        Console.WriteLine(JsonSerializer.Serialize(r, JsonOpts));
+        return r.Success ? 0 : 1;
+    }
+
+    private static int RunFormatVolume(string[] args)
+    {
+        if (!TryGetStringArg(args, "--mount", out var mount)) { Console.Error.WriteLine("--mount <D:> is required"); return 2; }
+        string fs = TryGetStringArg(args, "--fs", out var fsStr) ? fsStr : "FAT32";
+        bool confirm = HasArg(args, "--i-understand-data-loss");
+        if (!confirm) { Console.Error.WriteLine("DESTRUCTIVE: --format-volume destroys data. Add --i-understand-data-loss."); return 2; }
+        var r = PartitionManager.FormatVolume(mount, fs);
+        Console.WriteLine(JsonSerializer.Serialize(r, JsonOpts));
+        return r.Success ? 0 : 1;
+    }
+
 }
