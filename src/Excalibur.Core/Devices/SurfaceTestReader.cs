@@ -13,15 +13,12 @@ public sealed class SurfaceTestReader
         public long BytesTotal { get; init; }
         public double InstantSpeedMbps { get; init; }
         public double AverageSpeedMbps { get; init; }
-        public double MinSpeedMbps { get; init; }
-        public double MaxSpeedMbps { get; init; }
         public int BadSectors { get; init; }
         public double PercentComplete { get; init; }
         public TimeSpan Elapsed { get; init; }
         public TimeSpan? Eta { get; init; }
-        public double WorstSpeedMbps { get; init; }
-        public long WorstLba { get; init; }
         public int CurrentBlockSizeBytes { get; init; }
+        public bool Resumed { get; init; }
     }
 
     public sealed class Options
@@ -30,6 +27,7 @@ public sealed class SurfaceTestReader
         public long EndLba { get; init; }
         public int BlockSizeBytes { get; init; } = 4 * 1024 * 1024;
         public int BucketCount { get; init; } = 1000;
+        public bool SuppressCalibration { get; init; }
     }
 
     public sealed class CalibrationResult
@@ -37,8 +35,6 @@ public sealed class SurfaceTestReader
         public CalibrationInfo Info { get; init; } = new();
         public int ChosenBlockSizeBytes { get; init; }
     }
-
-    // ---- calibration ----
 
     public CalibrationResult Calibrate(
         int diskNumber,
@@ -90,7 +86,6 @@ public sealed class SurfaceTestReader
                 foreach (int bs in candidates)
                 {
                     if (ct.IsCancellationRequested) break;
-
                     long blocks = calibBytes / bs;
                     if (blocks == 0) continue;
 
@@ -142,11 +137,7 @@ public sealed class SurfaceTestReader
                         ElapsedSeconds = (calibBytes / 1_048_576.0) / Math.Max(speed, 1),
                         Success = true,
                     });
-                    if (speed > bestSpeed)
-                    {
-                        bestSpeed = speed;
-                        bestBlockSize = bs;
-                    }
+                    if (speed > bestSpeed) { bestSpeed = speed; bestBlockSize = bs; }
                 }
                 else
                 {
@@ -160,10 +151,7 @@ public sealed class SurfaceTestReader
                 }
             }
         }
-        finally
-        {
-            handle.Dispose();
-        }
+        finally { handle.Dispose(); }
 
         return new CalibrationResult
         {
@@ -187,7 +175,9 @@ public sealed class SurfaceTestReader
         uint? logicalSectorSize,
         Options opts,
         CalibrationInfo? calibration,
+        TestState? resumeFrom,
         Action<ProgressSnapshot>? onProgress,
+        Action<TestState>? onStateCheckpoint,
         CancellationToken ct)
     {
         if (opts.BlockSizeBytes <= 0 || opts.BlockSizeBytes % 4096 != 0)
@@ -222,30 +212,54 @@ public sealed class SurfaceTestReader
         bytesPerBucket = ((bytesPerBucket + opts.BlockSizeBytes - 1) / opts.BlockSizeBytes) * opts.BlockSizeBytes;
         bucketCount = (int)Math.Min(bucketCount, Math.Max(1, (totalBytes + bytesPerBucket - 1) / bytesPerBucket));
 
-        var buckets = new BucketStats[bucketCount];
-        for (int i = 0; i < bucketCount; i++)
+        BucketStats[] buckets;
+        bool resumed = resumeFrom != null;
+
+        if (resumed && resumeFrom!.Buckets.Count == bucketCount)
         {
-            long bStart = opts.StartLba * (long)sectorSize + i * bytesPerBucket;
-            long bEnd = Math.Min(bStart + bytesPerBucket, opts.StartLba * (long)sectorSize + totalBytes);
-            buckets[i] = new BucketStats
+            buckets = resumeFrom.Buckets.ToArray();
+        }
+        else
+        {
+            buckets = new BucketStats[bucketCount];
+            for (int i = 0; i < bucketCount; i++)
             {
-                Index = i,
-                BytesStart = bStart - opts.StartLba * (long)sectorSize,
-                BytesEnd = bEnd - opts.StartLba * (long)sectorSize,
-                LbaStart = opts.StartLba + (bStart - opts.StartLba * (long)sectorSize) / sectorSize,
-                LbaEnd = opts.StartLba + (bEnd - opts.StartLba * (long)sectorSize) / sectorSize - 1,
-            };
+                long bStart = opts.StartLba * (long)sectorSize + i * bytesPerBucket;
+                long bEnd = Math.Min(bStart + bytesPerBucket, opts.StartLba * (long)sectorSize + totalBytes);
+                buckets[i] = new BucketStats
+                {
+                    Index = i,
+                    BytesStart = bStart - opts.StartLba * (long)sectorSize,
+                    BytesEnd = bEnd - opts.StartLba * (long)sectorSize,
+                    LbaStart = opts.StartLba + (bStart - opts.StartLba * (long)sectorSize) / sectorSize,
+                    LbaEnd = opts.StartLba + (bEnd - opts.StartLba * (long)sectorSize) / sectorSize - 1,
+                };
+            }
         }
 
-        long bytesRead = 0;
-        long blocksRead = 0;
-        var badBlocks = new List<BadBlock>();
-        int totalBadSectors = 0;
+        long bytesRead = resumed ? resumeFrom!.BytesReadBeforeResume : 0;
+        long blocksRead = resumed ? resumeFrom!.BlocksReadBeforeResume : 0;
+        var badBlocks = resumed
+            ? new List<BadBlock>(resumeFrom!.BadBlocks)
+            : new List<BadBlock>();
+        int totalBadSectors = badBlocks.Sum(b => b.SectorCount);
+
+        long resumeStartLba = resumed ? (resumeFrom!.LastCompletedLba + 1) : opts.StartLba;
+        if (resumeStartLba > opts.EndLba) resumeStartLba = opts.EndLba + 1;
+
+        long firstBlockIndex = (resumeStartLba - opts.StartLba) * (long)sectorSize / opts.BlockSizeBytes;
+
+        // Starting bucket pointer derived from resume
+        long resumedByteOffset = (resumeStartLba - opts.StartLba) * (long)sectorSize;
+        int currentBucketIdx = (int)Math.Min(bucketCount - 1, resumedByteOffset / bytesPerBucket);
+        long bytesIntoCurrentBucket = resumedByteOffset - (long)currentBucketIdx * bytesPerBucket;
+        if (bytesIntoCurrentBucket < 0) bytesIntoCurrentBucket = 0;
 
         var sw = Stopwatch.StartNew();
         var startedAt = DateTimeOffset.UtcNow;
         long lastReportMs = 0;
-        long lastReportBytes = 0;
+        long lastReportBytes = bytesRead;
+        long lastSaveMs = 0;
 
         var handle = NativeMethods.OpenDeviceForRead(diskNumber);
         if (handle.IsInvalid)
@@ -268,7 +282,7 @@ public sealed class SurfaceTestReader
         IntPtr buffer = IntPtr.Zero;
         try
         {
-            long startOffset = opts.StartLba * (long)sectorSize;
+            long startOffset = resumeStartLba * (long)sectorSize;
             if (!NativeMethods.SetFilePointerEx(handle, startOffset, out _, NativeMethods.FILE_BEGIN))
             {
                 int err = Marshal.GetLastWin32Error();
@@ -305,12 +319,23 @@ public sealed class SurfaceTestReader
                 };
             }
 
-            int currentBucketIdx = 0;
-            long bytesIntoCurrentBucket = 0;
+            long lastCompletedLba = resumed ? resumeFrom!.LastCompletedLba : (opts.StartLba - 1);
 
-            for (long i = 0; i < blocksTotal; i++)
+            for (long i = firstBlockIndex; i < blocksTotal; i++)
             {
-                if (ct.IsCancellationRequested) break;
+                if (ct.IsCancellationRequested)
+                {
+                    // Emit one final checkpoint before exiting
+                    if (onStateCheckpoint != null)
+                    {
+                        onStateCheckpoint(BuildState(
+                            diskNumber, model, serial, logicalSectorSize,
+                            opts, bucketCount, bytesPerBucket,
+                            lastCompletedLba, sw.Elapsed.TotalSeconds + (resumed ? resumeFrom!.ElapsedSecondsBeforeResume : 0),
+                            bytesRead, blocksRead, badBlocks, buckets));
+                    }
+                    break;
+                }
 
                 long blockStartTicks = sw.ElapsedTicks;
                 bool ok = NativeMethods.ReadFile(handle, buffer, (uint)opts.BlockSizeBytes, out uint readBytes, IntPtr.Zero);
@@ -340,11 +365,12 @@ public sealed class SurfaceTestReader
 
                     if (!NativeMethods.SetFilePointerEx(handle, (blockLbaEnd + 1) * (long)sectorSize, out _, NativeMethods.FILE_BEGIN))
                         break;
+
+                    lastCompletedLba = blockLbaEnd;
                 }
                 else
                 {
                     bytesRead += readBytes;
-
                     double blockSec = blockElapsedTicks / (double)Stopwatch.Frequency;
                     long remaining = readBytes;
                     while (remaining > 0)
@@ -366,24 +392,30 @@ public sealed class SurfaceTestReader
                             bytesIntoCurrentBucket = 0;
                         }
                     }
+                    lastCompletedLba = opts.StartLba + (blockOffset / (long)sectorSize) + (opts.BlockSizeBytes / (long)sectorSize) - 1;
                 }
 
                 blocksRead++;
 
                 long nowMs = sw.ElapsedMilliseconds;
+
+                // Progress report (250 ms throttle)
                 if (onProgress != null && (nowMs - lastReportMs) >= 250)
                 {
-                    double nowSec = nowMs / 1000.0;
+                    double nowSec = (nowMs / 1000.0) + (resumed ? resumeFrom!.ElapsedSecondsBeforeResume : 0);
                     double deltaSec = (nowMs - lastReportMs) / 1000.0;
                     double deltaBytes = bytesRead - lastReportBytes;
                     double instantMbps = deltaSec > 0 ? (deltaBytes / 1_048_576.0) / deltaSec : 0;
                     double avgMbps = nowSec > 0 ? (bytesRead / 1_048_576.0) / nowSec : 0;
 
-                    double pct = blocksTotal > 0 ? (100.0 * blocksRead / blocksTotal) : 0;
+                    double doneBytes = (resumeStartLba - opts.StartLba) * (long)sectorSize + (bytesRead - (resumed ? resumeFrom!.BytesReadBeforeResume : 0));
+                    double pct = totalBytes > 0 ? (100.0 * doneBytes / totalBytes) : 0;
+                    if (pct > 100) pct = 100;
+
                     TimeSpan? eta = null;
-                    if (avgMbps > 0 && blocksTotal > blocksRead)
+                    if (avgMbps > 0 && pct < 100)
                     {
-                        double remainBytes = (blocksTotal - blocksRead) * (double)opts.BlockSizeBytes;
+                        double remainBytes = totalBytes - doneBytes;
                         double remainSec = (remainBytes / 1_048_576.0) / avgMbps;
                         eta = TimeSpan.FromSeconds(remainSec);
                     }
@@ -394,25 +426,32 @@ public sealed class SurfaceTestReader
                         BytesTotal = totalBytes,
                         InstantSpeedMbps = instantMbps,
                         AverageSpeedMbps = avgMbps,
-                        MinSpeedMbps = 0,
-                        MaxSpeedMbps = 0,
                         BadSectors = totalBadSectors,
                         PercentComplete = pct,
-                        Elapsed = sw.Elapsed,
+                        Elapsed = TimeSpan.FromSeconds(nowSec),
                         Eta = eta,
-                        WorstSpeedMbps = 0,
-                        WorstLba = -1,
                         CurrentBlockSizeBytes = opts.BlockSizeBytes,
+                        Resumed = resumed,
                     });
 
                     lastReportMs = nowMs;
                     lastReportBytes = bytesRead;
                 }
+
+                // State checkpoint (5 s throttle)
+                if (onStateCheckpoint != null && (nowMs - lastSaveMs) >= 5000)
+                {
+                    onStateCheckpoint(BuildState(
+                        diskNumber, model, serial, logicalSectorSize,
+                        opts, bucketCount, bytesPerBucket,
+                        lastCompletedLba, sw.Elapsed.TotalSeconds + (resumed ? resumeFrom!.ElapsedSecondsBeforeResume : 0),
+                        bytesRead, blocksRead, badBlocks, buckets));
+                    lastSaveMs = nowMs;
+                }
             }
 
-            double totalElapsedSec = sw.Elapsed.TotalSeconds;
+            double totalElapsedSec = sw.Elapsed.TotalSeconds + (resumed ? resumeFrom!.ElapsedSecondsBeforeResume : 0);
 
-            // Aggregate from buckets
             double finalAvg = 0;
             double minB = double.MaxValue;
             double maxB = 0;
@@ -438,7 +477,6 @@ public sealed class SurfaceTestReader
             if (minB == double.MaxValue) minB = 0;
             if (worstB == double.MaxValue) { worstB = 0; worstLba = 0; }
 
-            // Median + slow bucket count
             double medianSpeed = 0;
             int slowBucketCount = 0;
             if (bucketAvgs.Count > 0)
@@ -450,7 +488,10 @@ public sealed class SurfaceTestReader
                     if (b.HasData && b.AvgSpeedMbps < threshold) slowBucketCount++;
             }
 
-            string status = ct.IsCancellationRequested ? "cancelled" : (badBlocks.Count > 0 ? "completed-with-errors" : "ok");
+            bool fullyCompleted = lastCompletedLba >= opts.EndLba;
+            string status = ct.IsCancellationRequested
+                ? "cancelled"
+                : (badBlocks.Count > 0 ? "completed-with-errors" : "ok");
 
             return new SurfaceTestResult
             {
@@ -495,6 +536,33 @@ public sealed class SurfaceTestReader
                 NativeMethods.VirtualFree(buffer, UIntPtr.Zero, NativeMethods.MEM_RELEASE);
             handle.Dispose();
         }
+    }
+
+    private static TestState BuildState(
+        int diskNumber, string? model, string? serial, uint? logicalSectorSize,
+        Options opts, int bucketCount, long bytesPerBucket,
+        long lastCompletedLba, double elapsedSeconds,
+        long bytesRead, long blocksRead,
+        List<BadBlock> badBlocks, BucketStats[] buckets)
+    {
+        return new TestState
+        {
+            DiskNumber = diskNumber,
+            Model = model,
+            SerialNumber = serial,
+            LogicalSectorSize = logicalSectorSize,
+            StartLba = opts.StartLba,
+            EndLba = opts.EndLba,
+            BlockSizeBytes = opts.BlockSizeBytes,
+            BucketCount = bucketCount,
+            LastCompletedLba = lastCompletedLba,
+            LastSavedAt = DateTimeOffset.UtcNow,
+            ElapsedSecondsBeforeResume = elapsedSeconds,
+            BytesReadBeforeResume = bytesRead,
+            BlocksReadBeforeResume = blocksRead,
+            BadBlocks = badBlocks.ToList(),
+            Buckets = buckets.ToList(),
+        };
     }
 
     private static string DescribeWin32(int err) => err switch

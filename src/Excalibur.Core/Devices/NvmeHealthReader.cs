@@ -59,7 +59,7 @@ public static class NvmeHealthReader
                 Flags = 0,
                 CommandId = 0,
                 NamespaceId = 0xFFFFFFFF,
-                CDW10 = (uint)(logPageId | (((size / 4) - 1) << 16)),
+                CDW10 = logPageId | ((uint)((size / 4) - 1) << 16),
                 CDW11 = 0,
             };
 

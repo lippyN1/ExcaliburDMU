@@ -15,6 +15,8 @@ public sealed class SurfaceTestService
         public bool Force { get; set; }
         public bool NoCalibrate { get; set; }
         public int BucketCount { get; set; } = 1000;
+        public string? StateFilePath { get; set; }
+        public TestState? ResumeFrom { get; set; }
     }
 
     public sealed class ProgressEvent
@@ -28,46 +30,66 @@ public sealed class SurfaceTestService
         PhysicalDisk disk,
         Options opts,
         Action<ProgressEvent>? onProgress,
+        Action<TestState>? onStateCheckpoint,
         CancellationToken ct)
     {
         long sectorSize = disk.LogicalSectorSize ?? 512;
-        long totalSectors = disk.CapacityBytes.HasValue
-            ? (disk.CapacityBytes.Value / sectorSize)
-            : 0;
-
+        long totalSectors = disk.CapacityBytes.HasValue ? (disk.CapacityBytes.Value / sectorSize) : 0;
         if (totalSectors == 0)
             throw new InvalidOperationException("Cannot determine disk capacity for disk " + disk.DiskNumber);
 
-        long startLba = opts.StartLba ?? 0;
-        long endLba = opts.EndLba ?? (totalSectors - 1);
+        long startLba;
+        long endLba;
+        int? blockSize = opts.BlockSizeBytes;
+        int bucketCount = opts.BucketCount;
+        TestState? resume = opts.ResumeFrom;
 
-        if (opts.Quick && opts.StartLba == null && opts.EndLba == null)
+        if (resume != null)
         {
-            long oneGbInSectors = 1024L * 1024 * 1024 / sectorSize;
-            if (totalSectors > oneGbInSectors)
+            // Resume overrides range and block size from saved state
+            startLba = resume.StartLba;
+            endLba = resume.EndLba;
+            blockSize = resume.BlockSizeBytes;
+            bucketCount = resume.BucketCount;
+        }
+        else
+        {
+            startLba = opts.StartLba ?? 0;
+            endLba = opts.EndLba ?? (totalSectors - 1);
+
+            if (opts.Quick && opts.StartLba == null && opts.EndLba == null)
             {
-                startLba = 0;
-                endLba = oneGbInSectors - 1;
+                long oneGbInSectors = 1024L * 1024 * 1024 / sectorSize;
+                if (totalSectors > oneGbInSectors) { startLba = 0; endLba = oneGbInSectors - 1; }
             }
+
+            if (startLba < 0) startLba = 0;
+            if (endLba >= totalSectors) endLba = totalSectors - 1;
+            if (endLba < startLba)
+                throw new ArgumentException("Invalid range: endLba < startLba");
         }
 
-        if (startLba < 0) startLba = 0;
-        if (endLba >= totalSectors) endLba = totalSectors - 1;
-        if (endLba < startLba)
-            throw new ArgumentException("Invalid range: endLba < startLba");
-
         long availableSectors = endLba - startLba + 1;
-        int blockSize = opts.BlockSizeBytes ?? (4 * 1024 * 1024);
+        int chosenBlockSize = blockSize ?? (4 * 1024 * 1024);
 
         CalibrationInfo? calibrationInfo = null;
-        if (opts.BlockSizeBytes == null && !opts.NoCalibrate)
+        if (resume != null)
+        {
+            calibrationInfo = new CalibrationInfo
+            {
+                Performed = false,
+                ChosenBlockSizeBytes = resume.BlockSizeBytes,
+                ChosenSpeedMbps = 0,
+            };
+        }
+        else if (opts.BlockSizeBytes == null && !opts.NoCalibrate)
         {
             onProgress?.Invoke(new ProgressEvent { InCalibration = true, CalibrationStep = "starting" });
             var reader = new SurfaceTestReader();
             var calib = reader.Calibrate(disk.DiskNumber, (uint)sectorSize, startLba, availableSectors, ct);
             calibrationInfo = calib.Info;
             if (calib.Info.Performed && calib.ChosenBlockSizeBytes > 0)
-                blockSize = calib.ChosenBlockSizeBytes;
+                chosenBlockSize = calib.ChosenBlockSizeBytes;
             onProgress?.Invoke(new ProgressEvent { InCalibration = true, CalibrationStep = "done" });
         }
         else if (opts.NoCalibrate)
@@ -75,7 +97,7 @@ public sealed class SurfaceTestService
             calibrationInfo = new CalibrationInfo
             {
                 Performed = false,
-                ChosenBlockSizeBytes = blockSize,
+                ChosenBlockSizeBytes = chosenBlockSize,
                 ChosenSpeedMbps = 0,
             };
         }
@@ -85,8 +107,8 @@ public sealed class SurfaceTestService
         {
             StartLba = startLba,
             EndLba = endLba,
-            BlockSizeBytes = blockSize,
-            BucketCount = opts.BucketCount,
+            BlockSizeBytes = chosenBlockSize,
+            BucketCount = bucketCount,
         };
 
         return readerMain.Run(
@@ -96,7 +118,9 @@ public sealed class SurfaceTestService
             disk.LogicalSectorSize,
             opts2,
             calibrationInfo,
+            resume,
             snap => onProgress?.Invoke(new ProgressEvent { InCalibration = false, Snapshot = snap }),
+            onStateCheckpoint,
             ct);
     }
 
@@ -105,7 +129,6 @@ public sealed class SurfaceTestService
         var sysDrive = Environment.GetEnvironmentVariable("SystemDrive");
         if (string.IsNullOrEmpty(sysDrive)) sysDrive = "C:";
         var sysMount = sysDrive + "\\";
-        return disk.Volumes.Any(v =>
-            v.MountPoint.Equals(sysMount, StringComparison.OrdinalIgnoreCase));
+        return disk.Volumes.Any(v => v.MountPoint.Equals(sysMount, StringComparison.OrdinalIgnoreCase));
     }
 }
