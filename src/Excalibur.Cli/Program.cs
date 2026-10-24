@@ -31,10 +31,15 @@ internal static class Program
         if (HasArg(args, "--test-surface"))
             return RunSurfaceTest(args);
 
+        if (HasArg(args, "--capacity-test"))
+            return RunCapacityTest(args);
+
         Console.Error.WriteLine("Unknown arguments: " + string.Join(' ', args));
         PrintHelp();
         return 2;
     }
+
+    // ---- dump-devices ----
 
     private static int RunDumpDevices(bool pretty)
     {
@@ -52,9 +57,10 @@ internal static class Program
         return 0;
     }
 
+    // ---- test-surface ----
+
     private static int RunSurfaceTest(string[] args)
     {
-        // Parse arguments
         if (!TryGetIntArg(args, "--disk", out int diskNumber))
         {
             Console.Error.WriteLine("--disk N is required");
@@ -78,7 +84,6 @@ internal static class Program
         if (bucketCount <= 0 || bucketCount > 100000) { Console.Error.WriteLine("--buckets must be 1..100000"); return 2; }
         int? blockBytes = blockMb.HasValue ? blockMb.Value * 1024 * 1024 : (int?)null;
 
-        // Find disk
         var enumr = new DeviceEnumerator();
         var disks = enumr.EnumerateAll();
         var disk = disks.FirstOrDefault(d => d.DiskNumber == diskNumber);
@@ -90,12 +95,10 @@ internal static class Program
 
         if (SurfaceTestService.IsSystemDisk(disk) && !force)
         {
-            Console.Error.WriteLine("Refusing to test system disk (disk " + diskNumber + " contains Windows volume).");
-            Console.Error.WriteLine("Add --force to proceed anyway.");
+            Console.Error.WriteLine("Refusing to test system disk (contains Windows volume). Add --force.");
             return 2;
         }
 
-        // Resolve state file path
         string statePath;
         if (!string.IsNullOrEmpty(saveDirOverride))
         {
@@ -109,33 +112,14 @@ internal static class Program
             statePath = TestStateStore.DefaultStatePath(disk);
         }
 
-        // Resume logic
         TestState? resumeFrom = null;
         if (resumeFlag)
         {
             var loadPath = string.IsNullOrEmpty(resumePath) ? statePath : resumePath;
-            if (!File.Exists(loadPath))
-            {
-                Console.Error.WriteLine("Resume requested, but state file not found: " + loadPath);
-                return 2;
-            }
+            if (!File.Exists(loadPath)) { Console.Error.WriteLine("Resume requested, but state file not found: " + loadPath); return 2; }
             resumeFrom = TestStateStore.TryLoad(loadPath);
-            if (resumeFrom == null)
-            {
-                Console.Error.WriteLine("Failed to load state file: " + loadPath);
-                return 2;
-            }
-            if (resumeFrom.DiskNumber != diskNumber)
-            {
-                Console.Error.WriteLine("State file belongs to disk " + resumeFrom.DiskNumber + ", but --disk " + diskNumber + " given.");
-                return 2;
-            }
-            if (!string.Equals(resumeFrom.SerialNumber, disk.SerialNumber, StringComparison.Ordinal))
-            {
-                Console.Error.WriteLine("WARNING: disk serial in state (" + resumeFrom.SerialNumber + ") differs from current (" + disk.SerialNumber + ").");
-                Console.Error.WriteLine("Continuing anyway in 3 seconds... Press Ctrl+C to abort.");
-                Thread.Sleep(3000);
-            }
+            if (resumeFrom == null) { Console.Error.WriteLine("Failed to load state file: " + loadPath); return 2; }
+            if (resumeFrom.DiskNumber != diskNumber) { Console.Error.WriteLine("State file belongs to disk " + resumeFrom.DiskNumber); return 2; }
             Console.Error.WriteLine("Resuming from LBA " + (resumeFrom.LastCompletedLba + 1) + " / " + resumeFrom.EndLba);
         }
         else if (!discardState && File.Exists(statePath))
@@ -152,16 +136,10 @@ internal static class Program
         }
 
         Console.Error.WriteLine("Excalibur surface test (read-only)");
-        Console.Error.WriteLine("  Disk     : " + disk.DiskNumber + " — " + (disk.Model ?? "?"));
+        Console.Error.WriteLine("  Disk     : #" + disk.DiskNumber + " — " + (disk.Model ?? "?"));
         Console.Error.WriteLine("  Serial   : " + (disk.SerialNumber ?? "?"));
-        Console.Error.WriteLine("  Bus      : " + disk.BusTypeName);
         Console.Error.WriteLine("  Capacity : " + FormatBytes((double)(disk.CapacityBytes ?? 0)));
-        Console.Error.WriteLine("  Sector   : " + (disk.LogicalSectorSize?.ToString() ?? "?") + " B");
-        Console.Error.WriteLine("  Block    : " + (blockBytes.HasValue ? (blockBytes.Value / 1024 / 1024) + " MB (fixed)" : "auto (calibrate)"));
-        Console.Error.WriteLine("  Buckets  : " + bucketCount);
         Console.Error.WriteLine("  Range    : LBA " + (startLba ?? 0) + ".." + (endLba?.ToString() ?? "end"));
-        if (quick) Console.Error.WriteLine("  Mode     : quick (first 1 GB)");
-        if (exportHtml != null) Console.Error.WriteLine("  HTML     : " + exportHtml);
         Console.Error.WriteLine("  State    : " + statePath);
         Console.Error.WriteLine("Press Ctrl+C to cancel (state saved automatically).");
         Console.Error.WriteLine();
@@ -181,93 +159,35 @@ internal static class Program
         };
 
         using var cts = new CancellationTokenSource();
-        bool cancelRequested = false;
-        Console.CancelKeyPress += (_, ev) =>
-        {
-            ev.Cancel = true;
-            if (!cancelRequested)
-            {
-                cancelRequested = true;
-                Console.Error.WriteLine();
-                Console.Error.WriteLine("Cancelling... state will be saved on exit.");
-                cts.Cancel();
-            }
-        };
+        Console.CancelKeyPress += (_, ev) => { ev.Cancel = true; Console.Error.WriteLine(); Console.Error.WriteLine("Cancelling..."); cts.Cancel(); };
 
         var service = new SurfaceTestService();
-        int lastLineLen = 0;
-        bool inCalibration = false;
-
-        Action<TestState> saveState = st =>
-        {
-            try
-            {
-                TestStateStore.Save(statePath, st);
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine();
-                Console.Error.WriteLine("WARN: state save failed: " + ex.Message);
-            }
-        };
-
+        int lastLen = 0;
         SurfaceTestResult result;
         try
         {
             result = service.Run(disk, opts, pe =>
             {
-                if (pe.InCalibration)
-                {
-                    if (!inCalibration)
-                    {
-                        Console.Error.WriteLine("Calibrating block size (500 MB probe)...");
-                        inCalibration = true;
-                    }
-                    return;
-                }
-                inCalibration = false;
+                if (pe.InCalibration || pe.Snapshot == null) return;
                 var p = pe.Snapshot;
-                if (p == null) return;
-
                 var line = string.Format(
                     "\r[{0,5:0.0}%] {1,9} / {2,-9} | {3,6:0.0} MB/s (avg {4,6:0.0}) | bad: {5,3} | ETA {6}",
-                    p.PercentComplete,
-                    FormatBytes((double)p.BytesRead),
-                    FormatBytes((double)p.BytesTotal),
-                    p.InstantSpeedMbps,
-                    p.AverageSpeedMbps,
-                    p.BadSectors,
-                    FormatEta(p.Eta));
+                    p.PercentComplete, FormatBytes((double)p.BytesRead), FormatBytes((double)p.BytesTotal),
+                    p.InstantSpeedMbps, p.AverageSpeedMbps, p.BadSectors, FormatEta(p.Eta));
                 Console.Error.Write(line);
-                if (line.Length < lastLineLen)
-                    Console.Error.Write(new string(' ', lastLineLen - line.Length));
-                lastLineLen = line.Length;
-            }, saveState, cts.Token);
+                if (line.Length < lastLen) Console.Error.Write(new string(' ', lastLen - line.Length));
+                lastLen = line.Length;
+            }, st => { try { TestStateStore.Save(statePath, st); } catch (Exception ex) { Console.Error.WriteLine(); Console.Error.WriteLine("WARN: state save failed: " + ex.Message); } }, cts.Token);
         }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine();
-            Console.Error.WriteLine("Fatal: " + ex);
-            return 3;
-        }
+        catch (Exception ex) { Console.Error.WriteLine(); Console.Error.WriteLine("Fatal: " + ex); return 3; }
 
         Console.Error.WriteLine();
         Console.Error.WriteLine();
 
-        // Clean up state on successful completion (only if finished the full range)
         bool fullyDone = result.Status == "ok" || result.Status == "completed-with-errors";
-        if (fullyDone && File.Exists(statePath))
-        {
-            TestStateStore.Delete(statePath);
-            Console.Error.WriteLine("State file removed (test completed).");
-        }
-        else if (result.Status == "cancelled")
-        {
-            Console.Error.WriteLine("Progress saved to: " + statePath);
-            Console.Error.WriteLine("Resume with: Excalibur.exe --test-surface --disk " + diskNumber + " --resume");
-        }
+        if (fullyDone && File.Exists(statePath)) { TestStateStore.Delete(statePath); Console.Error.WriteLine("State file removed (test completed)."); }
+        else if (result.Status == "cancelled") { Console.Error.WriteLine("Progress saved to: " + statePath); }
 
-        // HTML report
         if (!string.IsNullOrWhiteSpace(exportHtml))
         {
             try
@@ -279,30 +199,159 @@ internal static class Program
                     if (File.Exists(rulesPath)) rulesVer = File.ReadAllText(rulesPath).Trim();
                 }
                 catch { }
-
                 var html = HtmlReportGenerator.Generate(result, rulesVer);
                 var outPath = Path.GetFullPath(exportHtml);
                 Directory.CreateDirectory(Path.GetDirectoryName(outPath) ?? ".");
                 File.WriteAllText(outPath, html, new System.Text.UTF8Encoding(false));
                 Console.Error.WriteLine("HTML report: " + outPath);
             }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine("HTML report failed: " + ex.Message);
-            }
+            catch (Exception ex) { Console.Error.WriteLine("HTML report failed: " + ex.Message); }
         }
 
-        var json = JsonSerializer.Serialize(result, JsonOpts);
-        Console.WriteLine(json);
-
-        return result.Status switch
-        {
-            "ok" => 0,
-            "completed-with-errors" => 1,
-            "cancelled" => 130,
-            _ => 4,
-        };
+        Console.WriteLine(JsonSerializer.Serialize(result, JsonOpts));
+        return result.Status switch { "ok" => 0, "completed-with-errors" => 1, "cancelled" => 130, _ => 4 };
     }
+
+    // ---- capacity-test ----
+
+    private static int RunCapacityTest(string[] args)
+    {
+        if (!TryGetIntArg(args, "--disk", out int diskNumber))
+        {
+            Console.Error.WriteLine("--disk N is required");
+            return 2;
+        }
+
+        bool hasConfirm = TryGetStringArg(args, "--confirm", out var confirmSerial);
+        bool hasUnderstand = HasArg(args, "--i-understand-data-loss");
+        bool full = HasArg(args, "--full");
+        int markerMb = TryGetIntArg(args, "--marker-mb", out var mm) ? mm : 4;
+        int markerSize = markerMb * 1024 * 1024;
+        string? exportHtml = TryGetStringArg(args, "--export-html", out var eh) ? eh : null;
+        bool preservePartitionTable = !HasArg(args, "--no-preserve-partition-table");
+
+        if (!hasUnderstand)
+        {
+            Console.Error.WriteLine("DESTRUCTIVE OPERATION.");
+            Console.Error.WriteLine("This test writes to the disk and destroys all data on it.");
+            Console.Error.WriteLine("Add --i-understand-data-loss to confirm.");
+            return 2;
+        }
+
+        if (!hasConfirm)
+        {
+            Console.Error.WriteLine("--confirm <SERIAL> is required. Type the exact disk serial number.");
+            return 2;
+        }
+
+        var enumr = new DeviceEnumerator();
+        var disks = enumr.EnumerateAll();
+        var disk = disks.FirstOrDefault(d => d.DiskNumber == diskNumber);
+        if (disk == null) { Console.Error.WriteLine("Disk not found"); return 2; }
+
+        if (CapacityTestService.IsSystemDisk(disk))
+        {
+            Console.Error.WriteLine("Refusing to run capacity test on the system disk (Windows volume).");
+            return 2;
+        }
+
+        if (string.IsNullOrEmpty(disk.SerialNumber))
+        {
+            Console.Error.WriteLine("Disk has no serial number; cannot safely confirm. Aborting.");
+            return 2;
+        }
+
+        if (!string.Equals(disk.SerialNumber, confirmSerial, StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine("SERIAL MISMATCH: --confirm '" + confirmSerial + "' does not match '" + disk.SerialNumber + "'");
+            return 2;
+        }
+
+        Console.Error.WriteLine("================= DESTRUCTIVE OPERATION =================");
+        Console.Error.WriteLine("Disk     : #" + disk.DiskNumber + " — " + (disk.Model ?? "?"));
+        Console.Error.WriteLine("Serial   : " + disk.SerialNumber);
+        Console.Error.WriteLine("Capacity : " + FormatBytes((double)(disk.CapacityBytes ?? 0)));
+        Console.Error.WriteLine("Mode     : " + (full ? "FULL SCAN (hours)" : "marker-only (fast)"));
+        Console.Error.WriteLine("Marker   : " + markerMb + " MB");
+        Console.Error.WriteLine("Partition: " + (preservePartitionTable ? "will be preserved (MBR/GPT saved and restored)" : "will be DESTROYED"));
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("ALL DATA ON THIS DISK WILL BE DESTROYED.");
+        Console.Error.WriteLine("Type the serial number again to proceed (or Ctrl+C to abort):");
+        var typed = Console.ReadLine();
+        if (!string.Equals(typed?.Trim(), disk.SerialNumber, StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine("Serial mismatch on interactive prompt. Aborting.");
+            return 2;
+        }
+
+        if (preservePartitionTable)
+        {
+            Console.Error.WriteLine();
+            Console.Error.WriteLine("Partition table (MBR/GPT) will be preserved.");
+            Console.Error.WriteLine("Filesystem data will still be damaged (only markers are written),");
+            Console.Error.WriteLine("but the volume will remain mountable (files will appear corrupted).");
+            Console.Error.WriteLine("To fully wipe the disk, use --no-preserve-partition-table.");
+        }
+        else
+        {
+            Console.Error.WriteLine();
+            Console.Error.WriteLine("WARNING: --no-preserve-partition-table — the entire disk layout will be destroyed.");
+            Console.Error.WriteLine("After the test you will need to reformat the disk in Windows.");
+        }
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("Starting in 3 seconds... Ctrl+C to abort.");
+        for (int i = 3; i > 0; i--) { Console.Error.WriteLine("  " + i + "..."); Thread.Sleep(1000); }
+
+        using var cts = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, ev) => { ev.Cancel = true; cts.Cancel(); };
+
+        var service = new CapacityTestService();
+        CapacityTestResult result;
+        try
+        {
+            result = service.Run(disk, new CapacityTestService.Options
+            {
+                DiskNumber = diskNumber,
+                FullScan = full,
+                MarkerSizeBytes = markerSize,
+                PreservePartitionTable = preservePartitionTable,
+            }, pe => { Console.Error.Write("\r[" + pe.Phase + "] " + pe.PercentComplete.ToString("0.0") + "% " + (pe.Message ?? "")); }, cts.Token);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine();
+            Console.Error.WriteLine("Fatal: " + ex);
+            return 3;
+        }
+
+        Console.Error.WriteLine();
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("Verdict: " + result.Verdict);
+        foreach (var r in result.VerdictReasons) Console.Error.WriteLine("  - " + r);
+        if (result.Warnings.Count > 0)
+        {
+            Console.Error.WriteLine("Warnings:");
+            foreach (var w in result.Warnings) Console.Error.WriteLine("  - " + w);
+        }
+
+        if (!string.IsNullOrWhiteSpace(exportHtml))
+        {
+            try
+            {
+                var html = CapacityHtmlReportGenerator.Generate(result, null);
+                var outPath = Path.GetFullPath(exportHtml);
+                Directory.CreateDirectory(Path.GetDirectoryName(outPath) ?? ".");
+                File.WriteAllText(outPath, html, new System.Text.UTF8Encoding(false));
+                Console.Error.WriteLine("HTML report: " + outPath);
+            }
+            catch (Exception ex) { Console.Error.WriteLine("HTML failed: " + ex.Message); }
+        }
+
+        Console.WriteLine(JsonSerializer.Serialize(result, JsonOpts));
+        return result.Verdict == "Healthy" ? 0 : 1;
+    }
+
+    // ---- helpers ----
 
     private static bool HasArg(string[] args, string name) =>
         args.Any(a => string.Equals(a, name, StringComparison.OrdinalIgnoreCase));
@@ -311,10 +360,7 @@ internal static class Program
     {
         value = 0;
         for (int i = 0; i < args.Length - 1; i++)
-        {
-            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase) &&
-                int.TryParse(args[i + 1], out value)) return true;
-        }
+            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase) && int.TryParse(args[i + 1], out value)) return true;
         return false;
     }
 
@@ -322,10 +368,7 @@ internal static class Program
     {
         value = 0;
         for (int i = 0; i < args.Length - 1; i++)
-        {
-            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase) &&
-                long.TryParse(args[i + 1], out value)) return true;
-        }
+            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase) && long.TryParse(args[i + 1], out value)) return true;
         return false;
     }
 
@@ -333,13 +376,7 @@ internal static class Program
     {
         value = "";
         for (int i = 0; i < args.Length - 1; i++)
-        {
-            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
-            {
-                value = args[i + 1];
-                return !string.IsNullOrEmpty(value);
-            }
-        }
+            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase)) { value = args[i + 1]; return !string.IsNullOrEmpty(value); }
         return false;
     }
 
@@ -367,30 +404,31 @@ internal static class Program
         Console.WriteLine("Usage:");
         Console.WriteLine("  Excalibur.exe --dump-devices [--compact]");
         Console.WriteLine("  Excalibur.exe --test-surface --disk N [options]");
+        Console.WriteLine("  Excalibur.exe --capacity-test --disk N --confirm SERIAL --i-understand-data-loss [options]");
         Console.WriteLine();
-        Console.WriteLine("dump-devices options:");
-        Console.WriteLine("  --dump-devices    Enumerate disks, output JSON");
-        Console.WriteLine("  --compact         Compact JSON");
+        Console.WriteLine("test-surface:");
+        Console.WriteLine("  --test-surface        Read-only scan");
+        Console.WriteLine("  --disk N              Physical disk number");
+        Console.WriteLine("  --start-lba X         Start LBA");
+        Console.WriteLine("  --end-lba Y           End LBA");
+        Console.WriteLine("  --block-mb B          Block size, MB");
+        Console.WriteLine("  --no-calibrate        Skip calibration");
+        Console.WriteLine("  --buckets N           Map buckets (default 1000)");
+        Console.WriteLine("  --quick               First 1 GB only");
+        Console.WriteLine("  --force               Allow system disk");
+        Console.WriteLine("  --export-html P       Write HTML report");
+        Console.WriteLine("  --resume [P]          Resume from saved state");
+        Console.WriteLine("  --discard-state       Delete saved state");
+        Console.WriteLine("  --save-dir D          Override state directory");
         Console.WriteLine();
-        Console.WriteLine("test-surface options:");
-        Console.WriteLine("  --test-surface    Read-only surface scan of physical disk N");
-        Console.WriteLine("  --disk N          Physical disk number (0, 1, ...)");
-        Console.WriteLine("  --start-lba X     Start LBA (default: 0)");
-        Console.WriteLine("  --end-lba Y       End LBA (default: end of disk)");
-        Console.WriteLine("  --block-mb B      Block size in MB, 1..64 (default: auto-calibrate)");
-        Console.WriteLine("  --no-calibrate    Skip calibration, use 4 MB blocks");
-        Console.WriteLine("  --buckets N       Number of map buckets (default: 1000)");
-        Console.WriteLine("  --quick           First 1 GB only");
-        Console.WriteLine("  --force           Allow testing system disk");
-        Console.WriteLine("  --export-html P   Write self-contained HTML report to path P");
-        Console.WriteLine("  --resume [P]      Resume from saved state (P optional; default: state dir)");
-        Console.WriteLine("  --discard-state   Discard any previous state before starting");
-        Console.WriteLine("  --save-dir D      Override state directory");
-        Console.WriteLine();
-        Console.WriteLine("State is auto-saved every 5 s to %LOCALAPPDATA%\\Excalibur\\test-state\\<serial>.json");
-        Console.WriteLine("and removed on successful completion. Ctrl+C saves and exits.");
-        Console.WriteLine();
-        Console.WriteLine("Exit codes:");
-        Console.WriteLine("  0 = no errors, 1 = bad sectors, 2 = bad args, 4 = fatal, 130 = cancelled");
+        Console.WriteLine("capacity-test (DESTRUCTIVE):");
+        Console.WriteLine("  --capacity-test                 Detect fake capacity");
+        Console.WriteLine("  --disk N                        Physical disk number");
+        Console.WriteLine("  --confirm SERIAL                Exact disk serial (required)");
+        Console.WriteLine("  --i-understand-data-loss        Required to proceed");
+        Console.WriteLine("  --full                          Full write+verify (slow)");
+        Console.WriteLine("  --marker-mb B                   Marker block size (default 4)");
+        Console.WriteLine("  --export-html P                 Write HTML report");
+        Console.WriteLine("  --no-preserve-partition-table   Do NOT save/restore MBR/GPT (default: preserve)");
     }
 }
