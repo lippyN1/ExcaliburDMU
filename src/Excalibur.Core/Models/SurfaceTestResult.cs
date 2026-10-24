@@ -30,6 +30,9 @@ public sealed class SurfaceTestResult
 
     public List<BadBlock> BadBlocks { get; init; } = new();
     public int TotalBadSectors { get; init; }
+    public RepairMode RepairMode { get; init; } = RepairMode.Ignore;
+    public int RepairedSectors { get; init; }
+    public int FailedRepairs { get; init; }
 
     public int SlowBlockCount { get; init; }
     public int SlowBucketCount { get; init; }

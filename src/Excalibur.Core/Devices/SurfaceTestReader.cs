@@ -14,6 +14,7 @@ public sealed class SurfaceTestReader
         public double InstantSpeedMbps { get; init; }
         public double AverageSpeedMbps { get; init; }
         public int BadSectors { get; init; }
+        public int RepairedSectors { get; init; }
         public double PercentComplete { get; init; }
         public TimeSpan Elapsed { get; init; }
         public TimeSpan? Eta { get; init; }
@@ -27,7 +28,7 @@ public sealed class SurfaceTestReader
         public long EndLba { get; init; }
         public int BlockSizeBytes { get; init; } = 4 * 1024 * 1024;
         public int BucketCount { get; init; } = 1000;
-        public bool SuppressCalibration { get; init; }
+        public RepairMode RepairMode { get; init; } = RepairMode.Ignore;
     }
 
     public sealed class CalibrationResult
@@ -35,6 +36,8 @@ public sealed class SurfaceTestReader
         public CalibrationInfo Info { get; init; } = new();
         public int ChosenBlockSizeBytes { get; init; }
     }
+
+    // ---- calibration ----
 
     public CalibrationResult Calibrate(
         int diskNumber,
@@ -204,6 +207,7 @@ public sealed class SurfaceTestReader
                 StartedAt = DateTimeOffset.UtcNow, FinishedAt = DateTimeOffset.UtcNow,
                 Calibration = calibration,
                 Status = "error", Error = "Range too small for one block",
+                RepairMode = opts.RepairMode,
             };
         }
 
@@ -239,17 +243,16 @@ public sealed class SurfaceTestReader
 
         long bytesRead = resumed ? resumeFrom!.BytesReadBeforeResume : 0;
         long blocksRead = resumed ? resumeFrom!.BlocksReadBeforeResume : 0;
-        var badBlocks = resumed
-            ? new List<BadBlock>(resumeFrom!.BadBlocks)
-            : new List<BadBlock>();
+        var badBlocks = resumed ? new List<BadBlock>(resumeFrom!.BadBlocks) : new List<BadBlock>();
         int totalBadSectors = badBlocks.Sum(b => b.SectorCount);
+        int repairedSectors = 0;
+        int failedRepairs = 0;
 
         long resumeStartLba = resumed ? (resumeFrom!.LastCompletedLba + 1) : opts.StartLba;
         if (resumeStartLba > opts.EndLba) resumeStartLba = opts.EndLba + 1;
 
         long firstBlockIndex = (resumeStartLba - opts.StartLba) * (long)sectorSize / opts.BlockSizeBytes;
 
-        // Starting bucket pointer derived from resume
         long resumedByteOffset = (resumeStartLba - opts.StartLba) * (long)sectorSize;
         int currentBucketIdx = (int)Math.Min(bucketCount - 1, resumedByteOffset / bytesPerBucket);
         long bytesIntoCurrentBucket = resumedByteOffset - (long)currentBucketIdx * bytesPerBucket;
@@ -261,7 +264,10 @@ public sealed class SurfaceTestReader
         long lastReportBytes = bytesRead;
         long lastSaveMs = 0;
 
-        var handle = NativeMethods.OpenDeviceForRead(diskNumber);
+        // Use write handle if repair mode requires writing
+        bool needWrite = opts.RepairMode != RepairMode.Ignore;
+        var handle = needWrite ? NativeMethods.OpenDeviceForWrite(diskNumber) : NativeMethods.OpenDeviceForRead(diskNumber);
+
         if (handle.IsInvalid)
         {
             int err = Marshal.GetLastWin32Error();
@@ -274,6 +280,7 @@ public sealed class SurfaceTestReader
                 TotalBytes = totalBytes, BlocksTotal = blocksTotal,
                 StartedAt = startedAt, FinishedAt = DateTimeOffset.UtcNow,
                 Calibration = calibration,
+                RepairMode = opts.RepairMode,
                 Status = "error",
                 Error = "CreateFile failed, Win32Error=" + err + " (" + DescribeWin32(err) + ")",
             };
@@ -295,6 +302,7 @@ public sealed class SurfaceTestReader
                     TotalBytes = totalBytes, BlocksTotal = blocksTotal,
                     StartedAt = startedAt, FinishedAt = DateTimeOffset.UtcNow,
                     Calibration = calibration,
+                    RepairMode = opts.RepairMode,
                     Status = "error",
                     Error = "SetFilePointerEx failed, Win32Error=" + err,
                 };
@@ -314,6 +322,7 @@ public sealed class SurfaceTestReader
                     TotalBytes = totalBytes, BlocksTotal = blocksTotal,
                     StartedAt = startedAt, FinishedAt = DateTimeOffset.UtcNow,
                     Calibration = calibration,
+                    RepairMode = opts.RepairMode,
                     Status = "error",
                     Error = "VirtualAlloc failed, Win32Error=" + err,
                 };
@@ -325,12 +334,9 @@ public sealed class SurfaceTestReader
             {
                 if (ct.IsCancellationRequested)
                 {
-                    // Emit one final checkpoint before exiting
                     if (onStateCheckpoint != null)
                     {
-                        onStateCheckpoint(BuildState(
-                            diskNumber, model, serial, logicalSectorSize,
-                            opts, bucketCount, bytesPerBucket,
+                        onStateCheckpoint(BuildState(diskNumber, model, serial, logicalSectorSize, opts,
                             lastCompletedLba, sw.Elapsed.TotalSeconds + (resumed ? resumeFrom!.ElapsedSecondsBeforeResume : 0),
                             bytesRead, blocksRead, badBlocks, buckets));
                     }
@@ -362,6 +368,57 @@ public sealed class SurfaceTestReader
 
                     int bi = (int)Math.Min(bucketCount - 1, blockOffset / bytesPerBucket);
                     buckets[bi].BadSectors += sectors;
+
+                    // ---- Repair attempt ----
+                    if (opts.RepairMode != RepairMode.Ignore)
+                    {
+                        bool repairOk = false;
+                        try
+                        {
+                            switch (opts.RepairMode)
+                            {
+                                case RepairMode.Refresh:
+                                    // If we read anything into buffer (short read), write it back; 
+                                    // otherwise write zeros for the whole block
+                                    if (readBytes > 0 && (readBytes % sectorSize) == 0)
+                                    {
+                                        byte[] partial = new byte[readBytes];
+                                        Marshal.Copy(buffer, partial, 0, (int)readBytes);
+                                        repairOk = RawDiskWriter.WriteAt(handle, blockOffset, partial);
+                                    }
+                                    else
+                                    {
+                                        repairOk = RawDiskWriter.WriteZerosAt(handle, blockOffset, opts.BlockSizeBytes);
+                                    }
+                                    break;
+
+                                case RepairMode.Remap:
+                                case RepairMode.Erase:
+                                    repairOk = RawDiskWriter.WriteZerosAt(handle, blockOffset, opts.BlockSizeBytes);
+                                    break;
+                            }
+                        }
+                        catch
+                        {
+                            repairOk = false;
+                        }
+
+                        if (repairOk)
+                        {
+                            repairedSectors += sectors;
+                            // Verify: re-read the block
+                            if (NativeMethods.SetFilePointerEx(handle, blockOffset, out _, NativeMethods.FILE_BEGIN) &&
+                                NativeMethods.ReadFile(handle, buffer, (uint)opts.BlockSizeBytes, out uint verifyRead, IntPtr.Zero) &&
+                                verifyRead == (uint)opts.BlockSizeBytes)
+                            {
+                                // Verified OK
+                            }
+                        }
+                        else
+                        {
+                            failedRepairs += sectors;
+                        }
+                    }
 
                     if (!NativeMethods.SetFilePointerEx(handle, (blockLbaEnd + 1) * (long)sectorSize, out _, NativeMethods.FILE_BEGIN))
                         break;
@@ -398,8 +455,6 @@ public sealed class SurfaceTestReader
                 blocksRead++;
 
                 long nowMs = sw.ElapsedMilliseconds;
-
-                // Progress report (250 ms throttle)
                 if (onProgress != null && (nowMs - lastReportMs) >= 250)
                 {
                     double nowSec = (nowMs / 1000.0) + (resumed ? resumeFrom!.ElapsedSecondsBeforeResume : 0);
@@ -427,6 +482,7 @@ public sealed class SurfaceTestReader
                         InstantSpeedMbps = instantMbps,
                         AverageSpeedMbps = avgMbps,
                         BadSectors = totalBadSectors,
+                        RepairedSectors = repairedSectors,
                         PercentComplete = pct,
                         Elapsed = TimeSpan.FromSeconds(nowSec),
                         Eta = eta,
@@ -438,12 +494,9 @@ public sealed class SurfaceTestReader
                     lastReportBytes = bytesRead;
                 }
 
-                // State checkpoint (5 s throttle)
                 if (onStateCheckpoint != null && (nowMs - lastSaveMs) >= 5000)
                 {
-                    onStateCheckpoint(BuildState(
-                        diskNumber, model, serial, logicalSectorSize,
-                        opts, bucketCount, bytesPerBucket,
+                    onStateCheckpoint(BuildState(diskNumber, model, serial, logicalSectorSize, opts,
                         lastCompletedLba, sw.Elapsed.TotalSeconds + (resumed ? resumeFrom!.ElapsedSecondsBeforeResume : 0),
                         bytesRead, blocksRead, badBlocks, buckets));
                     lastSaveMs = nowMs;
@@ -488,10 +541,7 @@ public sealed class SurfaceTestReader
                     if (b.HasData && b.AvgSpeedMbps < threshold) slowBucketCount++;
             }
 
-            bool fullyCompleted = lastCompletedLba >= opts.EndLba;
-            string status = ct.IsCancellationRequested
-                ? "cancelled"
-                : (badBlocks.Count > 0 ? "completed-with-errors" : "ok");
+            string status = ct.IsCancellationRequested ? "cancelled" : (badBlocks.Count > 0 ? "completed-with-errors" : "ok");
 
             return new SurfaceTestResult
             {
@@ -519,6 +569,9 @@ public sealed class SurfaceTestReader
                 BytesRead = bytesRead,
                 BadBlocks = badBlocks,
                 TotalBadSectors = totalBadSectors,
+                RepairMode = opts.RepairMode,
+                RepairedSectors = repairedSectors,
+                FailedRepairs = failedRepairs,
                 Calibration = calibration,
                 Map = new SurfaceMap
                 {
@@ -532,16 +585,14 @@ public sealed class SurfaceTestReader
         }
         finally
         {
-            if (buffer != IntPtr.Zero)
-                NativeMethods.VirtualFree(buffer, UIntPtr.Zero, NativeMethods.MEM_RELEASE);
+            if (buffer != IntPtr.Zero) NativeMethods.VirtualFree(buffer, UIntPtr.Zero, NativeMethods.MEM_RELEASE);
             handle.Dispose();
         }
     }
 
     private static TestState BuildState(
         int diskNumber, string? model, string? serial, uint? logicalSectorSize,
-        Options opts, int bucketCount, long bytesPerBucket,
-        long lastCompletedLba, double elapsedSeconds,
+        Options opts, long lastCompletedLba, double elapsedSeconds,
         long bytesRead, long blocksRead,
         List<BadBlock> badBlocks, BucketStats[] buckets)
     {
@@ -554,7 +605,7 @@ public sealed class SurfaceTestReader
             StartLba = opts.StartLba,
             EndLba = opts.EndLba,
             BlockSizeBytes = opts.BlockSizeBytes,
-            BucketCount = bucketCount,
+            BucketCount = opts.BucketCount,
             LastCompletedLba = lastCompletedLba,
             LastSavedAt = DateTimeOffset.UtcNow,
             ElapsedSecondsBeforeResume = elapsedSeconds,

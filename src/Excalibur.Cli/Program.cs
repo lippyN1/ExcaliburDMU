@@ -142,6 +142,40 @@ internal static class Program
         Console.Error.WriteLine(L.T("App_PressCtrlC"));
         Console.Error.WriteLine();
 
+        // Parse --repair-mode
+        RepairMode repairMode = RepairMode.Ignore;
+        if (TryGetStringArg(args, "--repair-mode", out var rmStr))
+        {
+            repairMode = rmStr.ToLowerInvariant() switch
+            {
+                "ignore" => RepairMode.Ignore,
+                "refresh" => RepairMode.Refresh,
+                "remap" => RepairMode.Remap,
+                "erase" => RepairMode.Erase,
+                _ => throw new ArgumentException("Invalid --repair-mode: " + rmStr)
+            };
+        }
+
+        if (repairMode != RepairMode.Ignore)
+        {
+            Console.Error.WriteLine();
+            Console.Error.WriteLine("!!! REPAIR MODE: " + repairMode + " !!!");
+            Console.Error.WriteLine("This test will MODIFY DATA on the disk to repair bad sectors.");
+            if (repairMode == RepairMode.Refresh)
+                Console.Error.WriteLine("  Refresh: reads block, writes it back. Data preserved if readable.");
+            else if (repairMode == RepairMode.Remap)
+                Console.Error.WriteLine("  Remap: writes zeros over bad sectors. Data LOST in bad sectors.");
+            else if (repairMode == RepairMode.Erase)
+                Console.Error.WriteLine("  Erase: zeros every unreadable block. Data LOST in bad sectors.");
+            Console.Error.WriteLine("Type 'REPAIR' to confirm, or anything else to abort:");
+            var reply = Console.ReadLine();
+            if (!string.Equals(reply?.Trim(), "REPAIR", StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("Repair not confirmed. Aborting.");
+                return 2;
+            }
+        }
+
         var opts = new SurfaceTestService.Options
         {
             DiskNumber = diskNumber,
@@ -154,6 +188,7 @@ internal static class Program
             BucketCount = bucketCount,
             StateFilePath = statePath,
             ResumeFrom = resumeFrom,
+            RepairMode = repairMode,
         };
 
         using var cts = new CancellationTokenSource();

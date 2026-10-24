@@ -94,4 +94,13 @@ internal static class NativeMethods
             FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero,
             OPEN_EXISTING, FILE_FLAG_NO_BUFFERING | FILE_FLAG_SEQUENTIAL_SCAN, IntPtr.Zero);
     }
+
+    public static SafeFileHandle OpenDeviceForWrite(int diskNumber)
+    {
+        var path = $@"\\.\PhysicalDrive{diskNumber}";
+        return CreateFileW(path, GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero,
+            OPEN_EXISTING, FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH, IntPtr.Zero);
+    }
+
 }

@@ -14,6 +14,7 @@ public sealed class SurfaceTestService
         public bool Quick { get; set; }
         public bool Force { get; set; }
         public bool NoCalibrate { get; set; }
+        public RepairMode RepairMode { get; set; } = RepairMode.Ignore;
         public int BucketCount { get; set; } = 1000;
         public string? StateFilePath { get; set; }
         public TestState? ResumeFrom { get; set; }
@@ -109,6 +110,7 @@ public sealed class SurfaceTestService
             EndLba = endLba,
             BlockSizeBytes = chosenBlockSize,
             BucketCount = bucketCount,
+            RepairMode = opts.RepairMode,
         };
 
         return readerMain.Run(
