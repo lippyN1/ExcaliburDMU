@@ -10,11 +10,4 @@
     <AssemblyName>Excalibur.Core</AssemblyName>
     <RootNamespace>Excalibur.Core</RootNamespace>
   </PropertyGroup>
-
-  <ItemGroup>
-    <None Include="..\..\rules\**\*.*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>rules\%(RecursiveDir)%(Filename)%(Extension)</Link>
-    </None>
-  </ItemGroup>
 </Project>

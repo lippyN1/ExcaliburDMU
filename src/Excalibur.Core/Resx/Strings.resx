@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  
+  <data name="App_Title" xml:space="preserve"><value>Excalibur v1.0.0-alpha — portable disk diagnostic tool</value></data>
+  <data name="App_Usage" xml:space="preserve"><value>Usage:</value></data>
+  <data name="App_RunElevated" xml:space="preserve"><value>Run elevated (Administrator) to access disks.</value></data>
+  <data name="App_PressCtrlC" xml:space="preserve"><value>Press Ctrl+C to cancel.</value></data>
+
+  <data name="Help_DumpDevices" xml:space="preserve"><value>  Excalibur.exe --dump-devices [--compact]</value></data>
+  <data name="Help_TestSurface" xml:space="preserve"><value>  Excalibur.exe --test-surface --disk N [options]</value></data>
+  <data name="Help_CapacityTest" xml:space="preserve"><value>  Excalibur.exe --capacity-test --disk N --confirm SERIAL --i-understand-data-loss [options]</value></data>
+  <data name="Help_TestSurfaceOptions" xml:space="preserve"><value>test-surface:</value></data>
+  <data name="Help_CapacityTestOptions" xml:space="preserve"><value>capacity-test (DESTRUCTIVE):</value></data>
+
+  <data name="Help_Dump_Desc" xml:space="preserve"><value>  --dump-devices        Enumerate disks, output JSON</value></data>
+  <data name="Help_Compact_Desc" xml:space="preserve"><value>  --compact             Compact JSON</value></data>
+  <data name="Help_Surface_Desc" xml:space="preserve"><value>  --test-surface        Read-only scan</value></data>
+  <data name="Help_Disk_Desc" xml:space="preserve"><value>  --disk N              Physical disk number</value></data>
+  <data name="Help_StartLba_Desc" xml:space="preserve"><value>  --start-lba X         Start LBA</value></data>
+  <data name="Help_EndLba_Desc" xml:space="preserve"><value>  --end-lba Y           End LBA</value></data>
+  <data name="Help_BlockMb_Desc" xml:space="preserve"><value>  --block-mb B          Block size, MB</value></data>
+  <data name="Help_NoCalibrate_Desc" xml:space="preserve"><value>  --no-calibrate        Skip calibration</value></data>
+  <data name="Help_Buckets_Desc" xml:space="preserve"><value>  --buckets N           Map buckets (default 1000)</value></data>
+  <data name="Help_Quick_Desc" xml:space="preserve"><value>  --quick               First 1 GB only</value></data>
+  <data name="Help_Force_Desc" xml:space="preserve"><value>  --force               Allow system disk</value></data>
+  <data name="Help_ExportHtml_Desc" xml:space="preserve"><value>  --export-html P       Write HTML report</value></data>
+  <data name="Help_Resume_Desc" xml:space="preserve"><value>  --resume [P]          Resume from saved state</value></data>
+  <data name="Help_DiscardState_Desc" xml:space="preserve"><value>  --discard-state       Delete saved state</value></data>
+  <data name="Help_SaveDir_Desc" xml:space="preserve"><value>  --save-dir D          Override state directory</value></data>
+  <data name="Help_Lang_Desc" xml:space="preserve"><value>  --lang XX             Force language (en, ru)</value></data>
+
+  <data name="Help_CapTest_Desc" xml:space="preserve"><value>  --capacity-test                 Detect fake capacity</value></data>
+  <data name="Help_Confirm_Desc" xml:space="preserve"><value>  --confirm SERIAL                Exact disk serial (required)</value></data>
+  <data name="Help_Understand_Desc" xml:space="preserve"><value>  --i-understand-data-loss        Required to proceed</value></data>
+  <data name="Help_Full_Desc" xml:space="preserve"><value>  --full                          Full write+verify (slow)</value></data>
+  <data name="Help_MarkerMb_Desc" xml:space="preserve"><value>  --marker-mb B                   Marker block size (default 4)</value></data>
+  <data name="Help_NoPreserve_Desc" xml:space="preserve"><value>  --no-preserve-partition-table   Do NOT save/restore MBR/GPT (default: preserve)</value></data>
+
+  <data name="Error_DiskRequired" xml:space="preserve"><value>--disk N is required</value></data>
+  <data name="Error_DiskNotFound" xml:space="preserve"><value>Disk {0} not found. Available: {1}</value></data>
+  <data name="Error_UnknownArgs" xml:space="preserve"><value>Unknown arguments: {0}</value></data>
+  <data name="Error_RefuseSystemDisk" xml:space="preserve"><value>Refusing to test system disk (contains Windows volume). Add --force.</value></data>
+  <data name="Error_NoUnderstandDataLoss" xml:space="preserve"><value>DESTRUCTIVE OPERATION. Add --i-understand-data-loss to confirm.</value></data>
+  <data name="Error_ConfirmRequired" xml:space="preserve"><value>--confirm &lt;SERIAL&gt; is required. Type the exact disk serial number.</value></data>
+  <data name="Error_SerialMismatch" xml:space="preserve"><value>SERIAL MISMATCH: --confirm '{0}' does not match '{1}'</value></data>
+  <data name="Error_SerialEmpty" xml:space="preserve"><value>Disk has no serial number; cannot safely confirm. Aborting.</value></data>
+  <data name="Error_SerialInteractiveMismatch" xml:space="preserve"><value>Serial mismatch on interactive prompt. Aborting.</value></data>
+  <data name="Error_ResumeNotFound" xml:space="preserve"><value>Resume requested, but state file not found: {0}</value></data>
+  <data name="Error_StateFileExists" xml:space="preserve"><value>A saved state exists at {0}. Use --resume or --discard-state.</value></data>
+  <data name="Error_BlockMbRange" xml:space="preserve"><value>--block-mb must be 1..64</value></data>
+  <data name="Error_BucketsRange" xml:space="preserve"><value>--buckets must be 1..100000</value></data>
+
+  <data name="Msg_SurfaceTestTitle" xml:space="preserve"><value>Excalibur surface test (read-only)</value></data>
+  <data name="Msg_DiskLabel" xml:space="preserve"><value>  Disk     : #{0} — {1}</value></data>
+  <data name="Msg_SerialLabel" xml:space="preserve"><value>  Serial   : {0}</value></data>
+  <data name="Msg_CapacityLabel" xml:space="preserve"><value>  Capacity : {0}</value></data>
+  <data name="Msg_RangeLabel" xml:space="preserve"><value>  Range    : LBA {0}..{1}</value></data>
+  <data name="Msg_StateLabel" xml:space="preserve"><value>  State    : {0}</value></data>
+  <data name="Msg_ModeLabel" xml:space="preserve"><value>  Mode     : {0}</value></data>
+  <data name="Msg_MarkerLabel" xml:space="preserve"><value>  Marker   : {0} MB</value></data>
+  <data name="Msg_PartitionLabel" xml:space="preserve"><value>  Partition: {0}</value></data>
+  <data name="Msg_HTMLReport" xml:space="preserve"><value>HTML report: {0}</value></data>
+  <data name="Msg_StateRemoved" xml:space="preserve"><value>State file removed (test completed).</value></data>
+  <data name="Msg_ProgressSaved" xml:space="preserve"><value>Progress saved to: {0}</value></data>
+  <data name="Msg_ResumingFrom" xml:space="preserve"><value>Resuming from LBA {0} / {1}</value></data>
+  <data name="Msg_DiscardedState" xml:space="preserve"><value>Discarded previous state: {0}</value></data>
+  <data name="Msg_Cancelling" xml:space="preserve"><value>Cancelling...</value></data>
+  <data name="Msg_Calibrating" xml:space="preserve"><value>Calibrating block size (500 MB probe)...</value></data>
+
+  <data name="Msg_CapTestTitle" xml:space="preserve"><value>================= DESTRUCTIVE OPERATION =================</value></data>
+  <data name="Msg_CapTestWarnAllData" xml:space="preserve"><value>ALL DATA ON THIS DISK WILL BE DESTROYED.</value></data>
+  <data name="Msg_CapTestTypeSerial" xml:space="preserve"><value>Type the serial number again to proceed (or Ctrl+C to abort):</value></data>
+  <data name="Msg_CapTestStarting3" xml:space="preserve"><value>Starting in 3 seconds... Ctrl+C to abort.</value></data>
+  <data name="Msg_CapTestPreserve" xml:space="preserve"><value>Partition table (MBR/GPT) will be preserved.</value></data>
+  <data name="Msg_CapTestPreserveDetail" xml:space="preserve"><value>Filesystem data will still be damaged (only markers are written).</value></data>
+  <data name="Msg_CapTestWillBeDestroyed" xml:space="preserve"><value>WARNING: --no-preserve-partition-table — the entire disk layout will be destroyed.</value></data>
+  <data name="Msg_CapTestReformatNeeded" xml:space="preserve"><value>After the test you will need to reformat the disk in Windows.</value></data>
+  <data name="Msg_Verdict" xml:space="preserve"><value>Verdict: {0}</value></data>
+  <data name="Msg_Warnings" xml:space="preserve"><value>Warnings:</value></data>
+
+  <data name="Mode_FixedBlock" xml:space="preserve"><value>  Block    : {0} MB (fixed)</value></data>
+  <data name="Mode_AutoCalibrate" xml:space="preserve"><value>  Block    : auto (calibrate)</value></data>
+  <data name="Mode_FullScan" xml:space="preserve"><value>FULL SCAN (hours)</value></data>
+  <data name="Mode_MarkerOnly" xml:space="preserve"><value>marker-only (fast)</value></data>
+  <data name="Mode_Preserve" xml:space="preserve"><value>will be preserved (MBR/GPT saved and restored)</value></data>
+  <data name="Mode_Destroy" xml:space="preserve"><value>will be DESTROYED</value></data>
+</root>

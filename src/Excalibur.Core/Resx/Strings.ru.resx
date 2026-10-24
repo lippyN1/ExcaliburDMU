@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  
+  <data name="App_Title" xml:space="preserve"><value>Excalibur v1.0.0-alpha — портативная утилита диагностики дисков</value></data>
+  <data name="App_Usage" xml:space="preserve"><value>Использование:</value></data>
+  <data name="App_RunElevated" xml:space="preserve"><value>Запустите от имени администратора для доступа к дискам.</value></data>
+  <data name="App_PressCtrlC" xml:space="preserve"><value>Нажмите Ctrl+C для отмены.</value></data>
+
+  <data name="Help_TestSurfaceOptions" xml:space="preserve"><value>test-surface:</value></data>
+  <data name="Help_CapacityTestOptions" xml:space="preserve"><value>capacity-test (РАЗРУШИТЕЛЬНАЯ):</value></data>
+
+  <data name="Help_Dump_Desc" xml:space="preserve"><value>  --dump-devices        Перечислить диски, JSON</value></data>
+  <data name="Help_Compact_Desc" xml:space="preserve"><value>  --compact             Компактный JSON</value></data>
+  <data name="Help_Surface_Desc" xml:space="preserve"><value>  --test-surface        Только чтение</value></data>
+  <data name="Help_Disk_Desc" xml:space="preserve"><value>  --disk N              Номер физического диска</value></data>
+  <data name="Help_StartLba_Desc" xml:space="preserve"><value>  --start-lba X         Стартовый LBA</value></data>
+  <data name="Help_EndLba_Desc" xml:space="preserve"><value>  --end-lba Y           Конечный LBA</value></data>
+  <data name="Help_BlockMb_Desc" xml:space="preserve"><value>  --block-mb B          Размер блока, МБ</value></data>
+  <data name="Help_NoCalibrate_Desc" xml:space="preserve"><value>  --no-calibrate        Без автокалибровки</value></data>
+  <data name="Help_Buckets_Desc" xml:space="preserve"><value>  --buckets N           Бакетов карты (по умолчанию 1000)</value></data>
+  <data name="Help_Quick_Desc" xml:space="preserve"><value>  --quick               Только первые 1 ГБ</value></data>
+  <data name="Help_Force_Desc" xml:space="preserve"><value>  --force               Разрешить системный диск</value></data>
+  <data name="Help_ExportHtml_Desc" xml:space="preserve"><value>  --export-html P       HTML-отчёт</value></data>
+  <data name="Help_Resume_Desc" xml:space="preserve"><value>  --resume [P]          Продолжить с сохранения</value></data>
+  <data name="Help_DiscardState_Desc" xml:space="preserve"><value>  --discard-state       Удалить сохранение</value></data>
+  <data name="Help_SaveDir_Desc" xml:space="preserve"><value>  --save-dir D          Свой каталог для сохранений</value></data>
+  <data name="Help_Lang_Desc" xml:space="preserve"><value>  --lang XX             Язык (en, ru)</value></data>
+
+  <data name="Help_CapTest_Desc" xml:space="preserve"><value>  --capacity-test                 Детект поддельной ёмкости</value></data>
+  <data name="Help_Confirm_Desc" xml:space="preserve"><value>  --confirm SERIAL                Точный серийник (обязательно)</value></data>
+  <data name="Help_Understand_Desc" xml:space="preserve"><value>  --i-understand-data-loss        Подтверждение потери данных</value></data>
+  <data name="Help_Full_Desc" xml:space="preserve"><value>  --full                          Полная запись+проверка (долго)</value></data>
+  <data name="Help_MarkerMb_Desc" xml:space="preserve"><value>  --marker-mb B                   Размер маркера, МБ (по умолчанию 4)</value></data>
+  <data name="Help_NoPreserve_Desc" xml:space="preserve"><value>  --no-preserve-partition-table   НЕ сохранять/восстанавливать MBR/GPT</value></data>
+
+  <data name="Error_DiskRequired" xml:space="preserve"><value>--disk N обязателен</value></data>
+  <data name="Error_DiskNotFound" xml:space="preserve"><value>Диск {0} не найден. Доступные: {1}</value></data>
+  <data name="Error_UnknownArgs" xml:space="preserve"><value>Неизвестные аргументы: {0}</value></data>
+  <data name="Error_RefuseSystemDisk" xml:space="preserve"><value>Отказ: системный диск (содержит Windows). Добавьте --force.</value></data>
+  <data name="Error_NoUnderstandDataLoss" xml:space="preserve"><value>РАЗРУШИТЕЛЬНАЯ ОПЕРАЦИЯ. Добавьте --i-understand-data-loss.</value></data>
+  <data name="Error_ConfirmRequired" xml:space="preserve"><value>--confirm &lt;SERIAL&gt; обязателен. Введите точный серийник диска.</value></data>
+  <data name="Error_SerialMismatch" xml:space="preserve"><value>СЕРИЙНИК НЕ СОВПАЛ: --confirm '{0}' не равен '{1}'</value></data>
+  <data name="Error_SerialEmpty" xml:space="preserve"><value>У диска нет серийника; безопасное подтверждение невозможно. Прерывание.</value></data>
+  <data name="Error_SerialInteractiveMismatch" xml:space="preserve"><value>Серийник не совпал при вводе. Прерывание.</value></data>
+  <data name="Error_ResumeNotFound" xml:space="preserve"><value>Запрошен resume, но файл сохранения не найден: {0}</value></data>
+  <data name="Error_StateFileExists" xml:space="preserve"><value>Есть сохранение в {0}. Используйте --resume или --discard-state.</value></data>
+  <data name="Error_BlockMbRange" xml:space="preserve"><value>--block-mb должен быть 1..64</value></data>
+  <data name="Error_BucketsRange" xml:space="preserve"><value>--buckets должен быть 1..100000</value></data>
+
+  <data name="Msg_SurfaceTestTitle" xml:space="preserve"><value>Excalibur: тест поверхности (только чтение)</value></data>
+  <data name="Msg_DiskLabel" xml:space="preserve"><value>  Диск     : #{0} — {1}</value></data>
+  <data name="Msg_SerialLabel" xml:space="preserve"><value>  Серийник : {0}</value></data>
+  <data name="Msg_CapacityLabel" xml:space="preserve"><value>  Ёмкость  : {0}</value></data>
+  <data name="Msg_RangeLabel" xml:space="preserve"><value>  Диапазон : LBA {0}..{1}</value></data>
+  <data name="Msg_StateLabel" xml:space="preserve"><value>  State    : {0}</value></data>
+  <data name="Msg_ModeLabel" xml:space="preserve"><value>  Режим    : {0}</value></data>
+  <data name="Msg_MarkerLabel" xml:space="preserve"><value>  Маркер   : {0} МБ</value></data>
+  <data name="Msg_PartitionLabel" xml:space="preserve"><value>  Раздел   : {0}</value></data>
+  <data name="Msg_HTMLReport" xml:space="preserve"><value>HTML-отчёт: {0}</value></data>
+  <data name="Msg_StateRemoved" xml:space="preserve"><value>Файл сохранения удалён (тест завершён).</value></data>
+  <data name="Msg_ProgressSaved" xml:space="preserve"><value>Прогресс сохранён в: {0}</value></data>
+  <data name="Msg_ResumingFrom" xml:space="preserve"><value>Продолжение с LBA {0} / {1}</value></data>
+  <data name="Msg_DiscardedState" xml:space="preserve"><value>Предыдущее сохранение удалено: {0}</value></data>
+  <data name="Msg_Cancelling" xml:space="preserve"><value>Отмена...</value></data>
+  <data name="Msg_Calibrating" xml:space="preserve"><value>Калибровка размера блока (проба 500 МБ)...</value></data>
+
+  <data name="Msg_CapTestTitle" xml:space="preserve"><value>================= РАЗРУШИТЕЛЬНАЯ ОПЕРАЦИЯ =================</value></data>
+  <data name="Msg_CapTestWarnAllData" xml:space="preserve"><value>ВСЕ ДАННЫЕ НА ЭТОМ ДИСКЕ БУДУТ УНИЧТОЖЕНЫ.</value></data>
+  <data name="Msg_CapTestTypeSerial" xml:space="preserve"><value>Введите серийник ещё раз для продолжения (или Ctrl+C для отмены):</value></data>
+  <data name="Msg_CapTestStarting3" xml:space="preserve"><value>Запуск через 3 секунды... Ctrl+C для отмены.</value></data>
+  <data name="Msg_CapTestPreserve" xml:space="preserve"><value>Таблица разделов (MBR/GPT) будет сохранена.</value></data>
+  <data name="Msg_CapTestPreserveDetail" xml:space="preserve"><value>Данные файловой системы будут повреждены (пишутся только маркеры).</value></data>
+  <data name="Msg_CapTestWillBeDestroyed" xml:space="preserve"><value>ВНИМАНИЕ: --no-preserve-partition-table — весь диск будет уничтожен.</value></data>
+  <data name="Msg_CapTestReformatNeeded" xml:space="preserve"><value>После теста потребуется переформатировать диск в Windows.</value></data>
+  <data name="Msg_Verdict" xml:space="preserve"><value>Вердикт: {0}</value></data>
+  <data name="Msg_Warnings" xml:space="preserve"><value>Предупреждения:</value></data>
+
+  <data name="Mode_FixedBlock" xml:space="preserve"><value>  Блок     : {0} МБ (фикс.)</value></data>
+  <data name="Mode_AutoCalibrate" xml:space="preserve"><value>  Блок     : авто (калибровка)</value></data>
+  <data name="Mode_FullScan" xml:space="preserve"><value>ПОЛНОЕ СКАНИРОВАНИЕ (часы)</value></data>
+  <data name="Mode_MarkerOnly" xml:space="preserve"><value>только маркеры (быстро)</value></data>
+  <data name="Mode_Preserve" xml:space="preserve"><value>будет сохранена (MBR/GPT)</value></data>
+  <data name="Mode_Destroy" xml:space="preserve"><value>БУДЕТ УНИЧТОЖЕНА</value></data>
+</root>
