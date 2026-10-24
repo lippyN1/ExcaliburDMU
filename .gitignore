@@ -1,9 +1,22 @@
+# Build output
 bin/
 obj/
 dist/
-*.user
+
+# IDE
 .vs/
+*.user
+*.suo
+*.DotSettings.user
+.idea/
+
+# Test artifacts
 *.html
 surface*.json
 dump.json
+report*.html
+*.bak
+
+# Keep rules (they are source)
 !rules/*.json
+!rules/*.txt
