@@ -1,529 +1,105 @@
+﻿using System;
+using System.Linq;
 using System.Text.Json;
-using System.Text.Json.Serialization;
-using Excalibur.Core;
+using System.Threading;
 using Excalibur.Core.Devices;
-using Excalibur.Core.Dump;
 using Excalibur.Core.Models;
 using Excalibur.Core.Services;
+using Excalibur.Core.Dump;
 
-namespace Excalibur.Cli;
-
-internal static class Program
+namespace Excalibur.Cli
 {
-    private static readonly JsonSerializerOptions JsonOpts = new()
+    class Program
     {
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
-    private static int Main(string[] args)
-    {
-        Console.OutputEncoding = System.Text.Encoding.UTF8;
-
-        if (TryGetStringArg(args, "--lang", out var lang)) L.SetLanguage(lang);
-
-        if (args.Length == 0 || HasArg(args, "-h") || HasArg(args, "--help"))
+        static void Main(string[] args)
         {
-            PrintHelp();
-            return args.Length == 0 ? 1 : 0;
-        }
-
-        if (HasArg(args, "--dump-devices"))
-            return RunDumpDevices(!HasArg(args, "--compact"));
-
-        if (HasArg(args, "--test-surface"))
-            return RunSurfaceTest(args);
-
-        if (HasArg(args, "--capacity-test"))
-            return RunCapacityTest(args);
-
-        if (HasArg(args, "--create-partition")) return RunCreatePartition(args);
-        if (HasArg(args, "--delete-partition")) return RunDeletePartition(args);
-        if (HasArg(args, "--set-letter")) return RunSetLetter(args);
-        if (HasArg(args, "--set-label")) return RunSetLabel(args);
-        if (HasArg(args, "--format-volume")) return RunFormatVolume(args);
-
-        Console.Error.WriteLine(L.T("Error_UnknownArgs", string.Join(' ', args)));
-        PrintHelp();
-        return 2;
-    }
-
-    private static int RunDumpDevices(bool pretty)
-    {
-        var service = new DumpService();
-        DeviceDump dump;
-        try { dump = service.Run(); }
-        catch (Exception ex) { Console.Error.WriteLine("Fatal: " + ex); return 3; }
-
-        var opts = new JsonSerializerOptions
-        {
-            WriteIndented = pretty,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        };
-        Console.WriteLine(JsonSerializer.Serialize(dump, opts));
-        return 0;
-    }
-
-    private static int RunSurfaceTest(string[] args)
-    {
-        if (!TryGetIntArg(args, "--disk", out int diskNumber))
-        {
-            Console.Error.WriteLine(L.T("Error_DiskRequired"));
-            return 2;
-        }
-
-        long? startLba = TryGetLongArg(args, "--start-lba", out var s) ? s : (long?)null;
-        long? endLba = TryGetLongArg(args, "--end-lba", out var e) ? e : (long?)null;
-        int? blockMb = TryGetIntArg(args, "--block-mb", out var b) ? b : (int?)null;
-        int bucketCount = TryGetIntArg(args, "--buckets", out var bk) ? bk : 1000;
-        bool quick = HasArg(args, "--quick");
-        bool force = HasArg(args, "--force");
-        bool noCalibrate = HasArg(args, "--no-calibrate");
-        string? exportHtml = TryGetStringArg(args, "--export-html", out var eh) ? eh : null;
-        string? saveDirOverride = TryGetStringArg(args, "--save-dir", out var sd) ? sd : null;
-        bool resumeFlag = HasArg(args, "--resume");
-        string? resumePath = TryGetStringArg(args, "--resume", out var rp) ? rp : null;
-        bool discardState = HasArg(args, "--discard-state");
-
-        if (blockMb is <= 0 or > 64) { Console.Error.WriteLine(L.T("Error_BlockMbRange")); return 2; }
-        if (bucketCount <= 0 || bucketCount > 100000) { Console.Error.WriteLine(L.T("Error_BucketsRange")); return 2; }
-        int? blockBytes = blockMb.HasValue ? blockMb.Value * 1024 * 1024 : (int?)null;
-
-        var enumr = new DeviceEnumerator();
-        var disks = enumr.EnumerateAll();
-        var disk = disks.FirstOrDefault(d => d.DiskNumber == diskNumber);
-        if (disk == null)
-        {
-            Console.Error.WriteLine(L.T("Error_DiskNotFound", diskNumber, string.Join(",", disks.Select(d => d.DiskNumber))));
-            return 2;
-        }
-
-        if (SurfaceTestService.IsSystemDisk(disk) && !force)
-        {
-            Console.Error.WriteLine(L.T("Error_RefuseSystemDisk"));
-            return 2;
-        }
-
-        string statePath;
-        if (!string.IsNullOrEmpty(saveDirOverride))
-        {
-            Directory.CreateDirectory(saveDirOverride);
-            var key = string.IsNullOrEmpty(disk.SerialNumber) ? ("disk" + disk.DiskNumber) : disk.SerialNumber;
-            foreach (var c in Path.GetInvalidFileNameChars()) key = key.Replace(c, '_');
-            statePath = Path.Combine(saveDirOverride, key + ".json");
-        }
-        else
-        {
-            statePath = TestStateStore.DefaultStatePath(disk);
-        }
-
-        TestState? resumeFrom = null;
-        if (resumeFlag)
-        {
-            var loadPath = string.IsNullOrEmpty(resumePath) ? statePath : resumePath;
-            if (!File.Exists(loadPath)) { Console.Error.WriteLine(L.T("Error_ResumeNotFound", loadPath)); return 2; }
-            resumeFrom = TestStateStore.TryLoad(loadPath);
-            if (resumeFrom == null) { Console.Error.WriteLine(L.T("Error_ResumeNotFound", loadPath)); return 2; }
-            if (resumeFrom.DiskNumber != diskNumber) { Console.Error.WriteLine(L.T("Error_DiskNotFound", resumeFrom.DiskNumber, "")); return 2; }
-            Console.Error.WriteLine(L.T("Msg_ResumingFrom", resumeFrom.LastCompletedLba + 1, resumeFrom.EndLba));
-        }
-        else if (!discardState && File.Exists(statePath))
-        {
-            Console.Error.WriteLine(L.T("Error_StateFileExists", statePath));
-            return 2;
-        }
-
-        if (discardState && File.Exists(statePath))
-        {
-            TestStateStore.Delete(statePath);
-            Console.Error.WriteLine(L.T("Msg_DiscardedState", statePath));
-        }
-
-        Console.Error.WriteLine(L.T("Msg_SurfaceTestTitle"));
-        Console.Error.WriteLine(L.T("Msg_DiskLabel", disk.DiskNumber, disk.Model ?? "?"));
-        Console.Error.WriteLine(L.T("Msg_SerialLabel", disk.SerialNumber ?? "?"));
-        Console.Error.WriteLine(L.T("Msg_CapacityLabel", FormatBytes((double)(disk.CapacityBytes ?? 0))));
-        Console.Error.WriteLine(L.T("Msg_RangeLabel", startLba ?? 0, endLba?.ToString() ?? "end"));
-        Console.Error.WriteLine(L.T("Msg_StateLabel", statePath));
-        Console.Error.WriteLine(L.T("App_PressCtrlC"));
-        Console.Error.WriteLine();
-
-        // Parse --repair-mode
-        RepairMode repairMode = RepairMode.Ignore;
-        if (TryGetStringArg(args, "--repair-mode", out var rmStr))
-        {
-            repairMode = rmStr.ToLowerInvariant() switch
+            if (args.Contains("--dump-devices"))
             {
-                "ignore" => RepairMode.Ignore,
-                "refresh" => RepairMode.Refresh,
-                "remap" => RepairMode.Remap,
-                "erase" => RepairMode.Erase,
-                _ => throw new ArgumentException("Invalid --repair-mode: " + rmStr)
-            };
-        }
-
-        if (repairMode != RepairMode.Ignore)
-        {
-            Console.Error.WriteLine();
-            Console.Error.WriteLine("!!! REPAIR MODE: " + repairMode + " !!!");
-            Console.Error.WriteLine("This test will MODIFY DATA on the disk to repair bad sectors.");
-            if (repairMode == RepairMode.Refresh)
-                Console.Error.WriteLine("  Refresh: reads block, writes it back. Data preserved if readable.");
-            else if (repairMode == RepairMode.Remap)
-                Console.Error.WriteLine("  Remap: writes zeros over bad sectors. Data LOST in bad sectors.");
-            else if (repairMode == RepairMode.Erase)
-                Console.Error.WriteLine("  Erase: zeros every unreadable block. Data LOST in bad sectors.");
-            Console.Error.WriteLine("Type 'REPAIR' to confirm, or anything else to abort:");
-            var reply = Console.ReadLine();
-            if (!string.Equals(reply?.Trim(), "REPAIR", StringComparison.Ordinal))
-            {
-                Console.Error.WriteLine("Repair not confirmed. Aborting.");
-                return 2;
+                var dump = new DumpService();
+                Console.WriteLine(dump.RunAsJson()); // <--- ВОТ ЭТА СТРОКА БЫЛА ПРОПУЩЕНА
+                return;
             }
+            if (args.Contains("--test-surface")) { RunSurfaceTest(int.Parse(args[args.Length - 1])); return; }
+            if (args.Contains("--test-capacity")) { RunCapacityTest(int.Parse(args[args.Length - 1])); return; }
+            if (args.Contains("--recover")) { RunRecovery(int.Parse(args[args.Length - 1])); return; }
+            if (args.Contains("--format")) { RunFormat(int.Parse(args[args.Length - 1])); return; }
+
+            Console.WriteLine("Excalibur Core v1.0.0");
+            Console.WriteLine("Usage: --dump-devices | --test-surface <n> | --test-capacity <n> | --recover <n> | --format <n>");
         }
 
-        var opts = new SurfaceTestService.Options
-        {
-            DiskNumber = diskNumber,
-            StartLba = startLba,
-            EndLba = endLba,
-            BlockSizeBytes = blockBytes,
-            Quick = quick,
-            Force = force,
-            NoCalibrate = noCalibrate,
-            BucketCount = bucketCount,
-            StateFilePath = statePath,
-            ResumeFrom = resumeFrom,
-            RepairMode = repairMode,
-        };
-
-        using var cts = new CancellationTokenSource();
-        Console.CancelKeyPress += (_, ev) => { ev.Cancel = true; Console.Error.WriteLine(); Console.Error.WriteLine(L.T("Msg_Cancelling")); cts.Cancel(); };
-
-        var service = new SurfaceTestService();
-        int lastLen = 0;
-        SurfaceTestResult result;
-        try
-        {
-            result = service.Run(disk, opts, pe =>
-            {
-                if (pe.InCalibration || pe.Snapshot == null) return;
-                var p = pe.Snapshot;
-                var line = string.Format(
-                    "\r[{0,5:0.0}%] {1,9} / {2,-9} | {3,6:0.0} MB/s (avg {4,6:0.0}) | bad: {5,3} | ETA {6}",
-                    p.PercentComplete, FormatBytes((double)p.BytesRead), FormatBytes((double)p.BytesTotal),
-                    p.InstantSpeedMbps, p.AverageSpeedMbps, p.BadSectors, FormatEta(p.Eta));
-                Console.Error.Write(line);
-                if (line.Length < lastLen) Console.Error.Write(new string(' ', lastLen - line.Length));
-                lastLen = line.Length;
-            }, st => { try { TestStateStore.Save(statePath, st); } catch (Exception ex) { Console.Error.WriteLine(); Console.Error.WriteLine("WARN: state save failed: " + ex.Message); } }, cts.Token);
-        }
-        catch (Exception ex) { Console.Error.WriteLine(); Console.Error.WriteLine("Fatal: " + ex); return 3; }
-
-        Console.Error.WriteLine();
-        Console.Error.WriteLine();
-
-        bool fullyDone = result.Status == "ok" || result.Status == "completed-with-errors";
-        if (fullyDone && File.Exists(statePath)) { TestStateStore.Delete(statePath); Console.Error.WriteLine(L.T("Msg_StateRemoved")); }
-        else if (result.Status == "cancelled") { Console.Error.WriteLine(L.T("Msg_ProgressSaved", statePath)); }
-
-        if (!string.IsNullOrWhiteSpace(exportHtml))
+        static void RunSurfaceTest(int diskIndex)
         {
             try
             {
-                string? rulesVer = null;
-                try
+                var reader = new SurfaceTestReader();
+                var opts = new SurfaceTestReader.Options { BlockSizeBytes = 1024 * 1024, BucketCount = 100 };
+                var result = reader.Run(diskIndex, "Unknown", "Unknown", 512, opts, null, null,
+                    p => { Console.WriteLine(JsonSerializer.Serialize(new { progress = Math.Round(p.PercentComplete, 2), speed = Math.Round(p.InstantSpeedMbps, 2) })); Console.Out.Flush(); },
+                    null, CancellationToken.None);
+                Console.WriteLine("RESULT: " + JsonSerializer.Serialize(new { success = true, badSectors = result.TotalBadSectors, avgSpeed = Math.Round(result.AverageSpeedMbps, 2) }));
+            }
+            catch (Exception ex) { Console.WriteLine("ERROR: " + ex.Message); }
+        }
+
+static void RunCapacityTest(int diskIndex)
+        {
+            try
+            {
+                var disk = new DeviceEnumerator().EnumerateAll().FirstOrDefault(d => d.DiskNumber == diskIndex);
+                if (disk == null) { Console.WriteLine("ERROR: Disk not found"); return; }
+                
+                // ВАЖНО: Используем сервис, который умеет отмонтировать тома!
+                var service = new CapacityTestService();
+                var opts = new CapacityTestService.Options
                 {
-                    var rulesPath = Path.Combine(AppContext.BaseDirectory, "rules", "rules-version.txt");
-                    if (File.Exists(rulesPath)) rulesVer = File.ReadAllText(rulesPath).Trim();
-                }
-                catch { }
-                var html = HtmlReportGenerator.Generate(result, rulesVer);
-                var outPath = Path.GetFullPath(exportHtml);
-                Directory.CreateDirectory(Path.GetDirectoryName(outPath) ?? ".");
-                File.WriteAllText(outPath, html, new System.Text.UTF8Encoding(false));
-                Console.Error.WriteLine(L.T("Msg_HTMLReport", outPath));
+                    DiskNumber = diskIndex,
+                    FullScan = false,
+                    MarkerSizeBytes = 1024 * 1024,
+                    PreservePartitionTable = true
+                };
+
+                var result = service.Run(disk, opts,
+                    p => { 
+                        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { progress = System.Math.Round(p.PercentComplete, 2), phase = p.Phase })); 
+                        Console.Out.Flush(); 
+                    },
+                    System.Threading.CancellationToken.None);
+
+                Console.WriteLine("RESULT: " + System.Text.Json.JsonSerializer.Serialize(new { 
+                    success = true, 
+                    verdict = result.Verdict, 
+                    reasons = result.VerdictReasons,
+                    capacityBytes = result.DeclaredCapacityBytes,
+                    writeSpeed = Math.Round(result.WriteSpeedMbps, 2),
+                    readSpeed = Math.Round(result.ReadSpeedMbps, 2),
+                    elapsed = Math.Round(result.ElapsedSeconds, 1)
+                }));
             }
-            catch (Exception ex) { Console.Error.WriteLine("HTML report failed: " + ex.Message); }
+            catch (Exception ex) { Console.WriteLine("ERROR: " + ex.Message); }
         }
 
-        Console.WriteLine(JsonSerializer.Serialize(result, JsonOpts));
-        return result.Status switch { "ok" => 0, "completed-with-errors" => 1, "cancelled" => 130, _ => 4 };
-    }
-
-    private static int RunCapacityTest(string[] args)
-    {
-        if (!TryGetIntArg(args, "--disk", out int diskNumber))
-        {
-            Console.Error.WriteLine(L.T("Error_DiskRequired"));
-            return 2;
-        }
-
-        bool hasConfirm = TryGetStringArg(args, "--confirm", out var confirmSerial);
-        bool hasUnderstand = HasArg(args, "--i-understand-data-loss");
-        bool full = HasArg(args, "--full");
-        int markerMb = TryGetIntArg(args, "--marker-mb", out var mm) ? mm : 4;
-        int markerSize = markerMb * 1024 * 1024;
-        string? exportHtml = TryGetStringArg(args, "--export-html", out var eh) ? eh : null;
-        bool preservePartitionTable = !HasArg(args, "--no-preserve-partition-table");
-
-        if (!hasUnderstand)
-        {
-            Console.Error.WriteLine(L.T("Error_NoUnderstandDataLoss"));
-            return 2;
-        }
-
-        if (!hasConfirm)
-        {
-            Console.Error.WriteLine(L.T("Error_ConfirmRequired"));
-            return 2;
-        }
-
-        var enumr = new DeviceEnumerator();
-        var disks = enumr.EnumerateAll();
-        var disk = disks.FirstOrDefault(d => d.DiskNumber == diskNumber);
-        if (disk == null) { Console.Error.WriteLine(L.T("Error_DiskNotFound", diskNumber, "")); return 2; }
-
-        if (CapacityTestService.IsSystemDisk(disk))
-        {
-            Console.Error.WriteLine(L.T("Error_RefuseSystemDisk"));
-            return 2;
-        }
-
-        if (string.IsNullOrEmpty(disk.SerialNumber))
-        {
-            Console.Error.WriteLine(L.T("Error_SerialEmpty"));
-            return 2;
-        }
-
-        if (!string.Equals(disk.SerialNumber, confirmSerial, StringComparison.Ordinal))
-        {
-            Console.Error.WriteLine(L.T("Error_SerialMismatch", confirmSerial, disk.SerialNumber));
-            return 2;
-        }
-
-        Console.Error.WriteLine(L.T("Msg_CapTestTitle"));
-        Console.Error.WriteLine(L.T("Msg_DiskLabel", disk.DiskNumber, disk.Model ?? "?"));
-        Console.Error.WriteLine(L.T("Msg_SerialLabel", disk.SerialNumber));
-        Console.Error.WriteLine(L.T("Msg_CapacityLabel", FormatBytes((double)(disk.CapacityBytes ?? 0))));
-        Console.Error.WriteLine(L.T("Msg_ModeLabel", full ? L.T("Mode_FullScan") : L.T("Mode_MarkerOnly")));
-        Console.Error.WriteLine(L.T("Msg_MarkerLabel", markerMb));
-        Console.Error.WriteLine(L.T("Msg_PartitionLabel", preservePartitionTable ? L.T("Mode_Preserve") : L.T("Mode_Destroy")));
-        Console.Error.WriteLine();
-        Console.Error.WriteLine(L.T("Msg_CapTestWarnAllData"));
-        Console.Error.WriteLine(L.T("Msg_CapTestTypeSerial"));
-        var typed = Console.ReadLine();
-        if (!string.Equals(typed?.Trim(), disk.SerialNumber, StringComparison.Ordinal))
-        {
-            Console.Error.WriteLine(L.T("Error_SerialInteractiveMismatch"));
-            return 2;
-        }
-
-        Console.Error.WriteLine();
-        if (preservePartitionTable)
-        {
-            Console.Error.WriteLine(L.T("Msg_CapTestPreserve"));
-            Console.Error.WriteLine(L.T("Msg_CapTestPreserveDetail"));
-        }
-        else
-        {
-            Console.Error.WriteLine(L.T("Msg_CapTestWillBeDestroyed"));
-            Console.Error.WriteLine(L.T("Msg_CapTestReformatNeeded"));
-        }
-        Console.Error.WriteLine();
-        Console.Error.WriteLine(L.T("Msg_CapTestStarting3"));
-        for (int i = 3; i > 0; i--) { Console.Error.WriteLine("  " + i + "..."); Thread.Sleep(1000); }
-
-        using var cts = new CancellationTokenSource();
-        Console.CancelKeyPress += (_, ev) => { ev.Cancel = true; cts.Cancel(); };
-
-        var service = new CapacityTestService();
-        CapacityTestResult result;
-        try
-        {
-            result = service.Run(disk, new CapacityTestService.Options
-            {
-                DiskNumber = diskNumber,
-                FullScan = full,
-                MarkerSizeBytes = markerSize,
-                PreservePartitionTable = preservePartitionTable,
-            }, pe => { Console.Error.Write("\r[" + pe.Phase + "] " + pe.PercentComplete.ToString("0.0") + "% " + (pe.Message ?? "")); }, cts.Token);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine();
-            Console.Error.WriteLine("Fatal: " + ex);
-            return 3;
-        }
-
-        Console.Error.WriteLine();
-        Console.Error.WriteLine();
-        Console.Error.WriteLine(L.T("Msg_Verdict", result.Verdict));
-        foreach (var r in result.VerdictReasons) Console.Error.WriteLine("  - " + r);
-        if (result.Warnings.Count > 0)
-        {
-            Console.Error.WriteLine(L.T("Msg_Warnings"));
-            foreach (var w in result.Warnings) Console.Error.WriteLine("  - " + w);
-        }
-
-        if (!string.IsNullOrWhiteSpace(exportHtml))
+        static void RunRecovery(int diskIndex)
         {
             try
             {
-                var html = CapacityHtmlReportGenerator.Generate(result, null);
-                var outPath = Path.GetFullPath(exportHtml);
-                Directory.CreateDirectory(Path.GetDirectoryName(outPath) ?? ".");
-                File.WriteAllText(outPath, html, new System.Text.UTF8Encoding(false));
-                Console.Error.WriteLine(L.T("Msg_HTMLReport", outPath));
+                var svc = new DataRecoveryService();
+                var res = svc.Run(new DataRecoveryService.Options { DiskNumber = diskIndex, OutDir = @"C:\Recovered" },
+                    p => { Console.WriteLine(JsonSerializer.Serialize(new { progress = Math.Round(p.Percent, 2), found = p.FoundFiles })); Console.Out.Flush(); },
+                    CancellationToken.None);
+                Console.WriteLine("RESULT: " + JsonSerializer.Serialize(new { success = true, message = res }));
             }
-            catch (Exception ex) { Console.Error.WriteLine("HTML failed: " + ex.Message); }
+            catch (Exception ex) { Console.WriteLine("ERROR: " + ex.Message); }
         }
 
-        Console.WriteLine(JsonSerializer.Serialize(result, JsonOpts));
-        return result.Verdict == "Healthy" ? 0 : 1;
+        static void RunFormat(int diskIndex)
+        {
+            try
+            {
+                var res = PartitionManager.QuickFormatDisk(diskIndex, "NTFS");
+                Console.WriteLine("RESULT: " + JsonSerializer.Serialize(new { success = res.Success, output = res.Success ? "Форматирование завершено" : res.Error }));
+            }
+            catch (Exception ex) { Console.WriteLine("ERROR: " + ex.Message); }
+        }
     }
-
-    private static bool HasArg(string[] args, string name) =>
-        args.Any(a => string.Equals(a, name, StringComparison.OrdinalIgnoreCase));
-
-    private static bool TryGetIntArg(string[] args, string name, out int value)
-    {
-        value = 0;
-        for (int i = 0; i < args.Length - 1; i++)
-            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase) && int.TryParse(args[i + 1], out value)) return true;
-        return false;
-    }
-
-    private static bool TryGetLongArg(string[] args, string name, out long value)
-    {
-        value = 0;
-        for (int i = 0; i < args.Length - 1; i++)
-            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase) && long.TryParse(args[i + 1], out value)) return true;
-        return false;
-    }
-
-    private static bool TryGetStringArg(string[] args, string name, out string value)
-    {
-        value = "";
-        for (int i = 0; i < args.Length - 1; i++)
-            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase)) { value = args[i + 1]; return !string.IsNullOrEmpty(value); }
-        return false;
-    }
-
-    private static string FormatBytes(double bytes)
-    {
-        string[] units = { "B", "KB", "MB", "GB", "TB", "PB" };
-        int i = 0;
-        while (bytes >= 1024 && i < units.Length - 1) { bytes /= 1024; i++; }
-        return bytes.ToString("N2") + " " + units[i];
-    }
-
-    private static string FormatEta(TimeSpan? eta)
-    {
-        if (eta == null) return "  --:--";
-        var t = eta.Value;
-        if (t.TotalHours >= 1) return string.Format("{0:0}h{1:00}m", (int)t.TotalHours, t.Minutes);
-        if (t.TotalMinutes >= 1) return string.Format("{0:0}m{1:00}s", (int)t.TotalMinutes, t.Seconds);
-        return string.Format("{0:0}s", (int)t.TotalSeconds);
-    }
-
-    private static void PrintHelp()
-    {
-        Console.WriteLine(L.T("App_Title"));
-        Console.WriteLine();
-        Console.WriteLine(L.T("App_Usage"));
-        Console.WriteLine(L.T("Help_DumpDevices"));
-        Console.WriteLine(L.T("Help_TestSurface"));
-        Console.WriteLine(L.T("Help_CapacityTest"));
-        Console.WriteLine();
-        Console.WriteLine(L.T("Help_TestSurfaceOptions"));
-        Console.WriteLine(L.T("Help_Surface_Desc"));
-        Console.WriteLine(L.T("Help_Disk_Desc"));
-        Console.WriteLine(L.T("Help_StartLba_Desc"));
-        Console.WriteLine(L.T("Help_EndLba_Desc"));
-        Console.WriteLine(L.T("Help_BlockMb_Desc"));
-        Console.WriteLine(L.T("Help_NoCalibrate_Desc"));
-        Console.WriteLine(L.T("Help_Buckets_Desc"));
-        Console.WriteLine(L.T("Help_Quick_Desc"));
-        Console.WriteLine(L.T("Help_Force_Desc"));
-        Console.WriteLine(L.T("Help_ExportHtml_Desc"));
-        Console.WriteLine(L.T("Help_Resume_Desc"));
-        Console.WriteLine(L.T("Help_DiscardState_Desc"));
-        Console.WriteLine(L.T("Help_SaveDir_Desc"));
-        Console.WriteLine(L.T("Help_Lang_Desc"));
-        Console.WriteLine();
-        Console.WriteLine(L.T("Help_CapacityTestOptions"));
-        Console.WriteLine(L.T("Help_CapTest_Desc"));
-        Console.WriteLine(L.T("Help_Disk_Desc"));
-        Console.WriteLine(L.T("Help_Confirm_Desc"));
-        Console.WriteLine(L.T("Help_Understand_Desc"));
-        Console.WriteLine(L.T("Help_Full_Desc"));
-        Console.WriteLine(L.T("Help_MarkerMb_Desc"));
-        Console.WriteLine(L.T("Help_NoPreserve_Desc"));
-        Console.WriteLine();
-        Console.WriteLine(L.T("App_RunElevated"));
-    }
-
-    // ---- partition management ----
-
-    private static int RunCreatePartition(string[] args)
-    {
-        if (!TryGetIntArg(args, "--disk", out int diskNumber)) { Console.Error.WriteLine(L.T("Error_DiskRequired")); return 2; }
-        if (!TryGetLongArg(args, "--size", out long sizeMb)) { Console.Error.WriteLine("--size <MB> is required"); return 2; }
-        string fs = TryGetStringArg(args, "--fs", out var fsStr) ? fsStr : "FAT32";
-        bool confirm = HasArg(args, "--i-understand-data-loss");
-        if (!confirm) { Console.Error.WriteLine("DESTRUCTIVE: --create-partition overwrites partition table. Add --i-understand-data-loss."); return 2; }
-        var enumr = new DeviceEnumerator();
-        var disks = enumr.EnumerateAll();
-        var disk = disks.FirstOrDefault(d => d.DiskNumber == diskNumber);
-        if (disk == null) { Console.Error.WriteLine(L.T("Error_DiskNotFound", diskNumber, "")); return 2; }
-        Console.Error.WriteLine("  Disk #" + diskNumber + ": " + (disk.Model ?? "?") + " SN:" + (disk.SerialNumber ?? "?"));
-        Console.Error.WriteLine("Type serial number to confirm (or Ctrl+C to abort):");
-        var typed = Console.ReadLine();
-        if (!string.Equals(typed?.Trim(), disk.SerialNumber, StringComparison.Ordinal)) { Console.Error.WriteLine("Serial mismatch. Aborting."); return 2; }
-        var r = PartitionManager.CreatePartition(diskNumber, sizeMb, fs);
-        Console.WriteLine(JsonSerializer.Serialize(r, JsonOpts));
-        return r.Success ? 0 : 1;
-    }
-
-    private static int RunDeletePartition(string[] args)
-    {
-        if (!TryGetIntArg(args, "--disk", out int diskNumber)) { Console.Error.WriteLine(L.T("Error_DiskRequired")); return 2; }
-        if (!TryGetIntArg(args, "--index", out int index)) { Console.Error.WriteLine("--index <N> is required"); return 2; }
-        bool confirm = HasArg(args, "--i-understand-data-loss");
-        if (!confirm) { Console.Error.WriteLine("DESTRUCTIVE: --delete-partition destroys data. Add --i-understand-data-loss."); return 2; }
-        var r = PartitionManager.DeletePartition(diskNumber, index);
-        Console.WriteLine(JsonSerializer.Serialize(r, JsonOpts));
-        return r.Success ? 0 : 1;
-    }
-
-    private static int RunSetLetter(string[] args)
-    {
-        if (!TryGetStringArg(args, "--mount", out var mount)) { Console.Error.WriteLine("--mount <D:> is required"); return 2; }
-        if (!TryGetStringArg(args, "--letter", out var letter)) { Console.Error.WriteLine("--letter <E> is required"); return 2; }
-        var r = PartitionManager.SetLetter(mount, letter);
-        Console.WriteLine(JsonSerializer.Serialize(r, JsonOpts));
-        return r.Success ? 0 : 1;
-    }
-
-    private static int RunSetLabel(string[] args)
-    {
-        if (!TryGetStringArg(args, "--mount", out var mount)) { Console.Error.WriteLine("--mount <D:> is required"); return 2; }
-        if (!TryGetStringArg(args, "--label", out var label)) { Console.Error.WriteLine("--label <text> is required"); return 2; }
-        var r = PartitionManager.SetLabel(mount, label);
-        Console.WriteLine(JsonSerializer.Serialize(r, JsonOpts));
-        return r.Success ? 0 : 1;
-    }
-
-    private static int RunFormatVolume(string[] args)
-    {
-        if (!TryGetStringArg(args, "--mount", out var mount)) { Console.Error.WriteLine("--mount <D:> is required"); return 2; }
-        string fs = TryGetStringArg(args, "--fs", out var fsStr) ? fsStr : "FAT32";
-        bool confirm = HasArg(args, "--i-understand-data-loss");
-        if (!confirm) { Console.Error.WriteLine("DESTRUCTIVE: --format-volume destroys data. Add --i-understand-data-loss."); return 2; }
-        var r = PartitionManager.FormatVolume(mount, fs);
-        Console.WriteLine(JsonSerializer.Serialize(r, JsonOpts));
-        return r.Success ? 0 : 1;
-    }
-
 }

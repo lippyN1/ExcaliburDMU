@@ -219,10 +219,18 @@ public sealed class DeviceEnumerator
                             long length = Marshal.ReadInt64(p, baseOff + 16);
                             if (diskNum == diskNumber)
                             {
+                                long freeBytes = 0;
+                                try {
+                                    ulong freeCaller, total, totalFree;
+                                    if (NativeMethods.GetDiskFreeSpaceEx(drive.Name, out freeCaller, out total, out totalFree))
+                                        freeBytes = (long)totalFree;
+                                } catch { }
+
                                 result.Add(new VolumeInfo
                                 {
                                     MountPoint = drive.Name,
                                     SizeBytes = length,
+                                    FreeBytes = freeBytes,
                                 });
                                 break;
                             }

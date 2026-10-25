@@ -1,5 +1,10 @@
+﻿using System;
 using System.Diagnostics;
-using System.Text;
+using System.Linq;
+using System.Management;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+using Excalibur.Core.Native;
 
 namespace Excalibur.Core.Services;
 
@@ -12,146 +17,173 @@ public static class PartitionManager
         public string Output { get; init; } = "";
     }
 
-    /// <summary>
-    /// Run a list of diskpart commands (one per line). Returns success + raw output.
-    /// </summary>
-    private static Result RunDiskpart(params string[] commands)
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool WriteFile(
+        SafeFileHandle hFile, IntPtr lpBuffer, uint nBytesToWrite, out uint lpBytesWritten, IntPtr lpOverlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(
+        SafeFileHandle hDevice, uint dwIoControlCode,
+        IntPtr lpInBuffer, uint nInBufferSize,
+        IntPtr lpOutBuffer, uint nOutBufferSize,
+        out uint lpBytesReturned, IntPtr lpOverlapped);
+
+    private const uint IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C;
+    private const uint IOCTL_DISK_SET_DRIVE_LAYOUT_EX = 0x0007C054;
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    struct MBR_PARTITION_ENTRY
     {
-        var script = string.Join("\r\n", commands) + "\r\n";
-        var psi = new ProcessStartInfo
+        public byte BootIndicator;
+        public byte StartHead;
+        public byte StartSector;
+        public byte StartCylinder;
+        public byte SystemID;
+        public byte EndHead;
+        public byte EndSector;
+        public byte EndCylinder;
+        public uint StartLBA;
+        public uint SectorCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    struct MBR
+    {
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 446)]
+        public byte[] BootCode;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+        public MBR_PARTITION_ENTRY[] Partitions;
+        public ushort Signature;
+    }
+
+    public static Result QuickFormatDisk(int diskNumber, string fs)
+    {
+        try
         {
-            FileName = "diskpart.exe",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-        };
+            // 1. Открываем диск и стираем старую MBR
+            var handle = NativeMethods.CreateFileW(
+                $@"\\.\PhysicalDrive{diskNumber}",
+                NativeMethods.GENERIC_READ | NativeMethods.GENERIC_WRITE,
+                NativeMethods.FILE_SHARE_READ | NativeMethods.FILE_SHARE_WRITE,
+                IntPtr.Zero, NativeMethods.OPEN_EXISTING, 0, IntPtr.Zero);
 
-        using var p = Process.Start(psi)!;
-        p.StandardInput.Write(script);
-        p.StandardInput.Close();
+            if (handle.IsInvalid)
+                return new Result { Success = false, Error = $"Не удалось открыть диск. Win32Error={Marshal.GetLastWin32Error()}" };
 
-        var output = p.StandardOutput.ReadToEnd();
-        var err = p.StandardError.ReadToEnd();
-        p.WaitForExit(30000);
+            try
+            {
+                long diskSize = GetDiskSize(handle);
+                if (diskSize <= 0) return new Result { Success = false, Error = "Не удалось определить размер." };
 
-        if (p.ExitCode != 0)
-            return new Result { Success = false, Error = $"diskpart exit {p.ExitCode}: {err}", Output = output };
+                IntPtr buffer = NativeMethods.VirtualAlloc(IntPtr.Zero, (UIntPtr)(10 * 1024 * 1024),
+                    NativeMethods.MEM_COMMIT | NativeMethods.MEM_RESERVE, NativeMethods.PAGE_READWRITE);
+                if (buffer == IntPtr.Zero) return new Result { Success = false, Error = "Ошибка памяти." };
 
-        // diskpart prints errors to stdout, in Russian or English depending on locale
-        var lower = output.ToLowerInvariant();
-        if (lower.Contains("ошибк") || lower.Contains("error") || lower.Contains("не удалось") || lower.Contains("failed"))
-        {
-            // Extract the error line(s) for the user
-            var lines = output.Split('\n').Where(l =>
-                l.Contains("ошиб", StringComparison.OrdinalIgnoreCase) ||
-                l.Contains("error", StringComparison.OrdinalIgnoreCase) ||
-                l.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
-                l.Contains("не удалось", StringComparison.OrdinalIgnoreCase)).ToArray();
-            var errText = lines.Length > 0 ? string.Join("; ", lines).Trim() : output.Trim();
-            return new Result { Success = false, Error = errText, Output = output };
+                try
+                {
+                    for (int i = 0; i < 10 * 1024 * 1024; i++) Marshal.WriteByte(buffer, i, 0);
+                    NativeMethods.SetFilePointerEx(handle, 0, out _, NativeMethods.FILE_BEGIN);
+                    WriteFile(handle, buffer, 10 * 1024 * 1024, out _, IntPtr.Zero);
+                }
+                finally { NativeMethods.VirtualFree(buffer, UIntPtr.Zero, NativeMethods.MEM_RELEASE); }
+
+                // 2. Создаем новую MBR
+                uint totalSectors = (uint)(diskSize / 512);
+                MBR mbr = new MBR { BootCode = new byte[446], Partitions = new MBR_PARTITION_ENTRY[4], Signature = 0xAA55 };
+                mbr.Partitions[0] = new MBR_PARTITION_ENTRY
+                {
+                    BootIndicator = 0x00,
+                    StartHead = 0xFE, StartSector = 0xFF, StartCylinder = 0xFF,
+                    SystemID = 0x07, // NTFS
+                    EndHead = 0xFE, EndSector = 0xFF, EndCylinder = 0xFF,
+                    StartLBA = 2048,
+                    SectorCount = totalSectors - 2048
+                };
+
+                IntPtr mbrPtr = Marshal.AllocHGlobal(Marshal.SizeOf<MBR>());
+                try
+                {
+                    Marshal.StructureToPtr(mbr, mbrPtr, false);
+                    NativeMethods.SetFilePointerEx(handle, 0, out _, NativeMethods.FILE_BEGIN);
+                    WriteFile(handle, mbrPtr, (uint)Marshal.SizeOf<MBR>(), out _, IntPtr.Zero);
+                }
+                finally { Marshal.FreeHGlobal(mbrPtr); }
+
+                DeviceIoControl(handle, IOCTL_DISK_SET_DRIVE_LAYOUT_EX, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+            }
+            finally { handle.Dispose(); }
+
+            // 3. Ждем, пока Windows присвоит букву
+            System.Threading.Thread.Sleep(3000);
+
+            // 4. Ищем букву
+            char driveLetter = FindDriveLetter(diskNumber);
+            if (driveLetter == '\0')
+                return new Result { Success = false, Error = "Диск размечен, но Windows не присвоил букву." };
+
+            // 5. Форматируем через format.com
+            string args = $"{driveLetter}: /FS:{fs} /Q /Y";
+            var psi = new ProcessStartInfo
+            {
+                FileName = "format.com",
+                Arguments = args,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
+            };
+
+            using var process = Process.Start(psi);
+            if (process == null)
+                return new Result { Success = false, Error = "Не удалось запустить format.com" };
+
+            string output = process.StandardOutput.ReadToEnd();
+            string err = process.StandardError.ReadToEnd();
+            process.WaitForExit(60000);
+
+            if (process.ExitCode != 0)
+                return new Result { Success = false, Error = $"format.com вернул код {process.ExitCode}. {err} {output}" };
+
+            return new Result { Success = true, Output = $"Диск {driveLetter}: отформатирован в {fs}." };
         }
-
-        return new Result { Success = true, Output = output };
+        catch (Exception ex)
+        {
+            return new Result { Success = false, Error = ex.Message };
+        }
     }
 
-    // ---- public API ----
-
-    public static Result CreatePartition(int diskNumber, long sizeMb, string fs)
+    private static long GetDiskSize(SafeFileHandle handle)
     {
-        fs = fs.ToUpperInvariant();
-        if (fs != "FAT32" && fs != "NTFS" && fs != "EXFAT")
-            return new Result { Success = false, Error = "Unsupported FS: " + fs + ". Use FAT32, NTFS or exFAT." };
-
-        if (sizeMb <= 0)
-            return new Result { Success = false, Error = "sizeMb must be > 0" };
-
-        return RunDiskpart(
-            "select disk " + diskNumber,
-            "create partition primary size=" + sizeMb,
-            "format fs=" + fs.ToLowerInvariant() + " quick",
-            "assign"
-        );
+        IntPtr outPtr = Marshal.AllocHGlobal(8);
+        try
+        {
+            return DeviceIoControl(handle, IOCTL_DISK_GET_LENGTH_INFO, IntPtr.Zero, 0, outPtr, 8, out _, IntPtr.Zero)
+                ? Marshal.ReadInt64(outPtr) : 0;
+        }
+        finally { Marshal.FreeHGlobal(outPtr); }
     }
 
-    public static Result DeletePartition(int diskNumber, int partitionIndex)
+    private static char FindDriveLetter(int diskNumber)
     {
-        if (partitionIndex <= 0)
-            return new Result { Success = false, Error = "partitionIndex must be >= 1 (diskpart uses 1-based indexes)" };
+        try
+        {
+            using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_LogicalDiskToPartition");
+            foreach (ManagementObject queryObj in searcher.Get())
+            {
+                var antecedent = queryObj["Antecedent"]?.ToString() ?? "";
+                var dependent = queryObj["Dependent"]?.ToString() ?? "";
 
-        // Use "clean" to remove ALL partitions on the disk — this is the most reliable way
-        // (delete partition override can silently fail on OEM-encoded Russian Windows).
-        // For single-partition flash drives (the common case) this is equivalent.
-        return RunDiskpart(
-            "select disk " + diskNumber,
-            "clean"
-        );
-    }
-
-    public static Result FormatVolume(string mountPoint, string fs)
-    {
-        fs = fs.ToUpperInvariant();
-        if (fs != "FAT32" && fs != "NTFS" && fs != "EXFAT")
-            return new Result { Success = false, Error = "Unsupported FS: " + fs };
-
-        var drive = mountPoint.TrimEnd('\\');
-        if (!drive.EndsWith(":")) drive += ":";
-
-        return RunDiskpart(
-            "select volume " + drive,
-            "format fs=" + fs.ToLowerInvariant() + " quick"
-        );
-    }
-
-    public static Result SetLetter(string mountPoint, string newLetter)
-    {
-        var drive = mountPoint.TrimEnd('\\');
-        if (!drive.EndsWith(":")) drive += ":";
-
-        var newL = newLetter.TrimEnd('\\', ':');
-        if (newL.Length != 1 || !char.IsLetter(newL[0]))
-            return new Result { Success = false, Error = "newLetter must be a single letter (e.g. E)" };
-        newL = newL.ToUpperInvariant();
-
-        return RunDiskpart(
-            "select volume " + drive,
-            "assign letter=" + newL
-        );
-    }
-
-    public static Result RemoveLetter(string mountPoint)
-    {
-        var drive = mountPoint.TrimEnd('\\');
-        if (!drive.EndsWith(":")) drive += ":";
-
-        return RunDiskpart(
-            "select volume " + drive,
-            "remove letter=" + drive[0]
-        );
-    }
-
-    // ---- label ----
-
-    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
-    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-    private static extern bool SetVolumeLabelW(string lpRootPathName, string lpVolumeName);
-
-    public static Result SetLabel(string mountPoint, string label)
-    {
-        var drive = mountPoint.TrimEnd('\\');
-        if (!drive.EndsWith(":")) drive += ":";
-        var root = drive + "\\";
-
-        if (label.Length > 32)
-            return new Result { Success = false, Error = "Label too long (max 32 chars)" };
-
-        bool ok = SetVolumeLabelW(root, label);
-        if (!ok)
-            return new Result { Success = false, Error = "SetVolumeLabel failed, Win32Error=" + System.Runtime.InteropServices.Marshal.GetLastWin32Error() };
-
-        return new Result { Success = true, Output = "Label set to '" + label + "' on " + drive };
+                if (antecedent.Contains($"Disk #{diskNumber},"))
+                {
+                    int quoteIdx = dependent.IndexOf('"');
+                    if (quoteIdx != -1 && dependent.Length > quoteIdx + 1)
+                        return dependent[quoteIdx + 1];
+                }
+            }
+        }
+        catch { }
+        return '\0';
     }
 }

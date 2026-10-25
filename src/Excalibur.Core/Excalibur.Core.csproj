@@ -10,4 +10,7 @@
     <AssemblyName>Excalibur.Core</AssemblyName>
     <RootNamespace>Excalibur.Core</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
 </Project>

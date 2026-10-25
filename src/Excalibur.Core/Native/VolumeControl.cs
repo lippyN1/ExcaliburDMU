@@ -3,7 +3,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Excalibur.Core.Native;
 
-internal static class VolumeControl
+public static class VolumeControl
 {
     public const uint FSCTL_LOCK_VOLUME = 0x00090018;
     public const uint FSCTL_UNLOCK_VOLUME = 0x0009001C;

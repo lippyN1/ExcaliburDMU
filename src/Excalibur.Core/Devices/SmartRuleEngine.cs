@@ -116,8 +116,30 @@ public sealed class SmartRuleEngine
         if (meta == null)
             return (r.ToString("N0"), "Info");
 
-        // Vendor-packed attributes without an explicit override: we don't know
-        // how to decode them, so say so honestly instead of showing garbage.
+        if (meta.Name == "Power_On_Hours")
+        {
+            ulong h = (ulong)attr.RawValue[0]
+                    | ((ulong)attr.RawValue[1] << 8)
+                    | ((ulong)attr.RawValue[2] << 16)
+                    | ((ulong)attr.RawValue[3] << 24);
+            return ($"{h:N0} h", "Info");
+        }
+
+        if (meta.Name == "Power_Cycle_Count")
+        {
+            ulong c = (ulong)attr.RawValue[0]
+                    | ((ulong)attr.RawValue[1] << 8)
+                    | ((ulong)attr.RawValue[2] << 16)
+                    | ((ulong)attr.RawValue[3] << 24);
+            return ($"{c:N0} cycles", "Ok");
+        }
+
+        if (meta.Name == "SSD_Life_Left" || meta.Name == "Media_Wearout_Indicator")
+        {
+            int pct = attr.CurrentValue;
+            return ($"{pct} %", pct < 10 ? "Critical" : pct < 30 ? "Warning" : "Ok");
+        }
+
         if (meta.VendorPacked)
             return ("<packed, vendor-specific>", "Info");
 

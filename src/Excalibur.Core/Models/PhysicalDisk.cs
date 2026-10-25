@@ -27,4 +27,5 @@ public sealed class VolumeInfo
 {
     public string MountPoint { get; init; } = "";
     public long SizeBytes { get; init; }
+    public long FreeBytes { get; init; }
 }
